@@ -75,7 +75,7 @@ AI服务（火山方舟）
 ## 克隆项目
 
 git clone https://github.com/suwenhui0801-dev/AI-renovation-system.git
-git clone https://gitee.com/suu_1_0/AI-renovation-system
+git clone https://gitee.com/suu_1_0/AI-renovation-system.git
 
 ## 安装依赖
 
