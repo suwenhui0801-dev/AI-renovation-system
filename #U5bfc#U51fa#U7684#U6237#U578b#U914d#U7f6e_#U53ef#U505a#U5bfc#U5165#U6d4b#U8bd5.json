@@ -1,0 +1,528 @@
+{
+  "furnitures": [
+    {
+      "color": "#6f7d8c",
+      "depth": 0.85,
+      "height": 0.82,
+      "id": "furniture_1",
+      "label": "沙发",
+      "material": "布艺",
+      "room_id": "room_1",
+      "rotation": 0,
+      "type": "sofa",
+      "width": 1.8,
+      "x": 0.9,
+      "y": 1.1,
+      "z": 0
+    }
+  ],
+  "grid_size_m": 0.5,
+  "message": "沙发已更新 ",
+  "openings": [
+    {
+      "color": "#8b6a4d",
+      "height": 2.1,
+      "id": "opening_1",
+      "material": "木纹",
+      "name": "客厅门",
+      "offset": 1.2,
+      "room_id": "room_1",
+      "sill": 0,
+      "type": "door",
+      "wall": "left",
+      "width": 1
+    },
+    {
+      "color": "#79bdf8",
+      "height": 1.5,
+      "id": "opening_2",
+      "material": "玻璃",
+      "name": "客厅窗",
+      "offset": 1.4,
+      "room_id": "room_1",
+      "sill": 0.9,
+      "type": "window",
+      "wall": "top",
+      "width": 1.6
+    },
+    {
+      "color": "#8b6a4d",
+      "height": 2.1,
+      "id": "opening_3",
+      "material": "木纹",
+      "name": "饭厅门",
+      "offset": 1.2,
+      "room_id": "room_2",
+      "sill": 0,
+      "type": "door",
+      "wall": "right",
+      "width": 0.9
+    }
+  ],
+  "options": {
+    "furniture_catalog": [
+      {
+        "category": "客厅",
+        "color": "#6f7d8c",
+        "depth": 0.85,
+        "group": "休闲家具",
+        "height": 0.82,
+        "icon": "🛋️",
+        "label": "沙发",
+        "material": "布艺",
+        "score": "高人气",
+        "tags": [
+          "客厅",
+          "主件",
+          "舒适"
+        ],
+        "value": "sofa",
+        "width": 1.8
+      },
+      {
+        "category": "客厅",
+        "color": "#8d7b68",
+        "depth": 0.78,
+        "group": "坐具家具",
+        "height": 0.82,
+        "icon": "🪑",
+        "label": "单人椅",
+        "material": "布艺",
+        "score": "高搭配",
+        "tags": [
+          "客厅",
+          "阅读",
+          "单座"
+        ],
+        "value": "armchair",
+        "width": 0.85
+      },
+      {
+        "category": "客厅",
+        "color": "#2b3038",
+        "depth": 0.36,
+        "group": "电器摆件",
+        "height": 0.68,
+        "icon": "📺",
+        "label": "电视柜",
+        "material": "木纹",
+        "score": "常用",
+        "tags": [
+          "客厅",
+          "电视",
+          "低柜"
+        ],
+        "value": "tv",
+        "width": 1.4
+      },
+      {
+        "category": "客厅",
+        "color": "#b58b62",
+        "depth": 0.6,
+        "group": "桌几家具",
+        "height": 0.45,
+        "icon": "☕",
+        "label": "茶几",
+        "material": "木纹",
+        "score": "热销",
+        "tags": [
+          "客厅",
+          "中心位",
+          "小桌"
+        ],
+        "value": "coffee_table",
+        "width": 1.05
+      },
+      {
+        "category": "客厅",
+        "color": "#c49a6c",
+        "depth": 0.45,
+        "group": "收纳家具",
+        "height": 0.82,
+        "icon": "🗄️",
+        "label": "边柜",
+        "material": "木纹",
+        "score": "推荐",
+        "tags": [
+          "客厅",
+          "收纳",
+          "靠墙"
+        ],
+        "value": "sideboard",
+        "width": 1.2
+      },
+      {
+        "category": "卧室",
+        "color": "#d9d0c7",
+        "depth": 1.8,
+        "group": "睡眠家具",
+        "height": 0.62,
+        "icon": "🛏️",
+        "label": "床",
+        "material": "布艺",
+        "score": "高人气",
+        "tags": [
+          "卧室",
+          "主件",
+          "双人"
+        ],
+        "value": "bed",
+        "width": 2
+      },
+      {
+        "category": "卧室",
+        "color": "#c49a6c",
+        "depth": 0.62,
+        "group": "收纳家具",
+        "height": 2.1,
+        "icon": "🚪",
+        "label": "衣柜",
+        "material": "木纹",
+        "score": "常用",
+        "tags": [
+          "卧室",
+          "高柜",
+          "收纳"
+        ],
+        "value": "wardrobe",
+        "width": 1.6
+      },
+      {
+        "category": "卧室",
+        "color": "#c19b73",
+        "depth": 0.42,
+        "group": "收纳家具",
+        "height": 0.56,
+        "icon": "🧺",
+        "label": "床头柜",
+        "material": "木纹",
+        "score": "搭配",
+        "tags": [
+          "卧室",
+          "边几",
+          "小件"
+        ],
+        "value": "nightstand",
+        "width": 0.48
+      },
+      {
+        "category": "卧室",
+        "color": "#9f7f56",
+        "depth": 0.32,
+        "group": "收纳家具",
+        "height": 1.9,
+        "icon": "📚",
+        "label": "书架",
+        "material": "木纹",
+        "score": "推荐",
+        "tags": [
+          "卧室",
+          "书房",
+          "靠墙"
+        ],
+        "value": "bookshelf",
+        "width": 1
+      },
+      {
+        "category": "卧室",
+        "color": "#b8956a",
+        "depth": 0.6,
+        "group": "桌几家具",
+        "height": 0.75,
+        "icon": "🧑‍💻",
+        "label": "书桌",
+        "material": "木纹",
+        "score": "常用",
+        "tags": [
+          "学习",
+          "办公",
+          "桌面"
+        ],
+        "value": "desk",
+        "width": 1.2
+      },
+      {
+        "category": "餐厅",
+        "color": "#d5b48c",
+        "depth": 0.82,
+        "group": "桌几家具",
+        "height": 0.75,
+        "icon": "🍽️",
+        "label": "餐桌",
+        "material": "木纹",
+        "score": "高人气",
+        "tags": [
+          "餐厅",
+          "主件",
+          "四人"
+        ],
+        "value": "dining_table",
+        "width": 1.4
+      },
+      {
+        "category": "餐厅",
+        "color": "#777777",
+        "depth": 0.5,
+        "group": "坐具家具",
+        "height": 0.9,
+        "icon": "🪑",
+        "label": "餐椅",
+        "material": "布艺",
+        "score": "常用",
+        "tags": [
+          "餐厅",
+          "坐具",
+          "搭配"
+        ],
+        "value": "dining_chair",
+        "width": 0.5
+      },
+      {
+        "category": "厨房",
+        "color": "#d7d7d7",
+        "depth": 0.6,
+        "group": "厨卫家具",
+        "height": 0.92,
+        "icon": "🍳",
+        "label": "橱柜台面",
+        "material": "大理石",
+        "score": "推荐",
+        "tags": [
+          "厨房",
+          "靠墙",
+          "台面"
+        ],
+        "value": "kitchen_counter",
+        "width": 1.6
+      },
+      {
+        "category": "卫浴",
+        "color": "#eef2f6",
+        "depth": 0.55,
+        "group": "厨卫家具",
+        "height": 0.86,
+        "icon": "🚰",
+        "label": "洗手台",
+        "material": "陶瓷",
+        "score": "高频",
+        "tags": [
+          "卫浴",
+          "洗漱",
+          "靠墙"
+        ],
+        "value": "sink",
+        "width": 0.9
+      },
+      {
+        "category": "卫浴",
+        "color": "#f7f7f7",
+        "depth": 0.72,
+        "group": "厨卫家具",
+        "height": 0.82,
+        "icon": "🚽",
+        "label": "马桶",
+        "material": "陶瓷",
+        "score": "高频",
+        "tags": [
+          "卫浴",
+          "固定",
+          "洁具"
+        ],
+        "value": "toilet",
+        "width": 0.72
+      },
+      {
+        "category": "卫浴",
+        "color": "#ffffff",
+        "depth": 0.78,
+        "group": "厨卫家具",
+        "height": 0.58,
+        "icon": "🛁",
+        "label": "浴缸",
+        "material": "陶瓷",
+        "score": "展示",
+        "tags": [
+          "卫浴",
+          "大件",
+          "靠墙"
+        ],
+        "value": "bathtub",
+        "width": 1.6
+      },
+      {
+        "category": "装饰",
+        "color": "#4caf50",
+        "depth": 0.7,
+        "group": "绿植装饰",
+        "height": 1,
+        "icon": "🪴",
+        "label": "绿植",
+        "material": "原木风",
+        "score": "推荐",
+        "tags": [
+          "装饰",
+          "绿植",
+          "点缀"
+        ],
+        "value": "potted_plant",
+        "width": 0.7
+      },
+      {
+        "category": "装饰",
+        "color": "#f06292",
+        "depth": 0.5,
+        "group": "绿植装饰",
+        "height": 0.62,
+        "icon": "🌸",
+        "label": "花盆",
+        "material": "陶瓷",
+        "score": "精致",
+        "tags": [
+          "装饰",
+          "花艺",
+          "小件"
+        ],
+        "value": "flower_pot",
+        "width": 0.5
+      },
+      {
+        "category": "装饰",
+        "color": "#2e7d32",
+        "depth": 1,
+        "group": "绿植装饰",
+        "height": 1.8,
+        "icon": "🌳",
+        "label": "室内树",
+        "material": "原木风",
+        "score": "展示",
+        "tags": [
+          "装饰",
+          "大株",
+          "景观"
+        ],
+        "value": "indoor_tree",
+        "width": 1
+      }
+    ],
+    "history": {
+      "can_redo": false,
+      "can_undo": true
+    },
+    "opening_types": [
+      {
+        "label": "门",
+        "value": "door"
+      },
+      {
+        "label": "窗",
+        "value": "window"
+      }
+    ],
+    "room_materials": [
+      "木纹",
+      "布艺",
+      "皮质",
+      "绒面",
+      "金属",
+      "石材",
+      "白色瓷砖",
+      "大理石",
+      "原木风",
+      "玻璃",
+      "烤漆",
+      "混凝土",
+      "陶瓷"
+    ],
+    "room_types": [
+      "卧室",
+      "浴室",
+      "客厅",
+      "饭厅",
+      "厨房",
+      "阳台"
+    ],
+    "rooms": [
+      {
+        "id": "room_1",
+        "name": "客厅"
+      },
+      {
+        "id": "room_2",
+        "name": "饭厅"
+      },
+      {
+        "id": "room_3",
+        "name": "卧室"
+      },
+      {
+        "id": "room_4",
+        "name": "阳台"
+      }
+    ],
+    "walls": [
+      {
+        "label": "上墙",
+        "value": "top"
+      },
+      {
+        "label": "右墙",
+        "value": "right"
+      },
+      {
+        "label": "下墙",
+        "value": "bottom"
+      },
+      {
+        "label": "左墙",
+        "value": "left"
+      }
+    ]
+  },
+  "rooms": [
+    {
+      "depth": 4,
+      "height": 3,
+      "id": "room_1",
+      "name": "客厅",
+      "wall_color": "#ede6d8",
+      "wall_material": "原木风",
+      "width": 4.8,
+      "x": 0,
+      "y": 0
+    },
+    {
+      "depth": 3,
+      "height": 3,
+      "id": "room_2",
+      "name": "饭厅",
+      "wall_color": "#f7f4ee",
+      "wall_material": "白色瓷砖",
+      "width": 3,
+      "x": 4.8,
+      "y": 0
+    },
+    {
+      "depth": 3.4,
+      "height": 3,
+      "id": "room_3",
+      "name": "卧室",
+      "wall_color": "#efe7da",
+      "wall_material": "木纹",
+      "width": 3.8,
+      "x": 0,
+      "y": 4
+    },
+    {
+      "depth": 1.8,
+      "height": 3,
+      "id": "room_4",
+      "name": "阳台",
+      "wall_color": "#eef3ea",
+      "wall_material": "白色瓷砖",
+      "width": 2.6,
+      "x": 4,
+      "y": 4.2
+    }
+  ],
+  "show_grid": true
+}

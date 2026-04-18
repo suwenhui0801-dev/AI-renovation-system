@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>装修模拟编辑器</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
+</head>
+<body class="page-main">
+  <div class="app-shell">
+    <aside class="sidebar">
+      <section class="card command-ai-card">
+        <div class="panel-tab-row top-switch-row">
+          <button id="showCommandPanelBtn" class="panel-tab-btn active">输入指令</button>
+          <button id="showAIFloorplanPanelBtn" class="panel-tab-btn">AI户型</button>
+        </div>
+
+        <div id="commandPanel" class="panel-switch-content visible">
+          <div class="command-input-wrap">
+            <textarea id="commandInput" placeholder="例如：给客厅添加沙发&#10;例如：给卧室添加窗户&#10;例如：添加房间"></textarea>
+          </div>
+
+          <div class="button-row wrap">
+            <button id="runCommandBtn">执行指令</button>
+            <button id="voiceCommandBtn" type="button" class="voice-btn">语音输入</button>
+            <button id="undoBtn">撤销</button>
+          </div>
+        </div>
+
+        <div id="aiFloorplanPanel" class="panel-switch-content">
+          <div class="grid two-col compact game-form">
+            <label class="full-span">提示文字
+              <input id="aiFloorplanInput" type="text" placeholder="输入户型描述，如：两室一厅、南北通透户型" />
+            </label>
+            <label class="full-span">户型图
+              <div id="floorplanPreview" class="floorplan-preview">
+                <div class="floorplan-placeholder">预览区（上传或生成户型图后显示）</div>
+              </div>
+            </label>
+          </div>
+
+          <div class="button-row wrap">
+            <button id="aiGenerateFloorplanBtn">AI生成户型图</button>
+            <button id="uploadFloorplanBtn">上传户型图</button>
+            <button id="saveFloorplanBtn">保存户型图</button>
+            <button id="applyFloorplanBtn">应用户型</button>
+          </div>
+
+          <div id="floorplanStatusText" class="gesture-action-text">等待操作...</div>
+        </div>
+      </section>
+
+      <section class="card gesture-card">
+        <div class="section-head">
+          <h2>手势识别</h2>
+          <span class="mini-text">摄像头 / 双手缩放 / 捏合拖拽</span>
+        </div>
+        <div class="gesture-toolbar">
+          <button id="gestureToggleBtn" type="button">开启手势识别</button>
+          <span id="gestureStatusText" class="gesture-status-pill">未开启</span>
+        </div>
+        <div class="gesture-camera-shell">
+          <video id="gestureVideo" class="gesture-video" autoplay playsinline muted></video>
+          <canvas id="gestureOverlay" class="gesture-overlay"></canvas>
+        </div>
+        <div id="gestureActionText" class="gesture-action-text">等待手势操作</div>
+        <div class="gesture-tip-list">
+          <span class="gesture-tip-chip">双手拉开 / 靠近：调整家具大小</span>
+          <span class="gesture-tip-chip">捏合开始：抓取家具</span>
+          <span class="gesture-tip-chip">捏合移动：拖动家具</span>
+          <span class="gesture-tip-chip">松开捏合：放下家具</span>
+          <span class="gesture-tip-chip">OK：完成当前操作</span>
+          <span class="gesture-tip-chip">👎手势：删除当前选中对象</span>
+          <span class="gesture-tip-chip">☝️食指伸出移动：移动光标</span>
+          <span class="gesture-tip-chip">👍手势：语音输入</span>
+          <span class="gesture-tip-chip">"3"手势：撤销上一步操作</span>
+        </div>
+      </section>
+
+      <section class="card side-list-card">
+        <div class="section-head">
+          <h2>编辑器工具</h2>
+          <span class="mini-text">2D / 3D 自由编辑</span>
+        </div>
+
+        <div class="side-switch-row">
+          <button id="toggleRoomPanelBtn" class="switch-btn secondary">房间列表</button>
+          <button id="toggleOpeningPanelBtn" class="switch-btn secondary">门窗列表</button>
+          <button id="toggleFurniturePanelBtn" class="switch-btn secondary">家具库</button>
+          <button id="toggleFurnitureEditorPanelBtn" class="switch-btn secondary">家具编辑器</button>
+        </div>
+
+        <div id="roomListPanel" class="side-list-panel">
+          <div class="side-list-head">
+            <strong>房间列表</strong>
+            <span class="mini-text">支持新增 / 移动 / 缩放</span>
+          </div>
+          <div class="grid two-col compact game-form">
+            <label class="full-span">房间名字
+              <input id="roomNameInput" type="text" placeholder="例如：客厅" />
+            </label>
+            <label>X 坐标(m)
+              <input id="roomXInput" type="number" step="0.1" />
+            </label>
+            <label>Y 坐标(m)
+              <input id="roomYInput" type="number" step="0.1" />
+            </label>
+            <label>宽度(m)
+              <input id="roomWidthInput" type="number" min="1.6" max="12" step="0.1" />
+            </label>
+            <label>进深(m)
+              <input id="roomDepthInput" type="number" min="1.6" max="12" step="0.1" />
+            </label>
+            <label>墙面材质
+              <select id="roomMaterialSelect"></select>
+            </label>
+            <label class="full-span">墙面颜色
+              <input id="roomColorInput" type="color" value="#f0efe9" />
+            </label>
+          </div>
+          <div class="action-row-three">
+            <button id="addRoomBtn">新增</button>
+            <button id="applyRoomBtn">应用</button>
+            <button id="deleteRoomBtn" class="danger">删除</button>
+          </div>
+        </div>
+
+        <div id="openingListPanel" class="side-list-panel">
+          <div class="side-list-head">
+            <strong>门窗列表</strong>
+            <span class="mini-text">点击按钮后展开</span>
+          </div>
+          <div class="grid two-col compact game-form">
+            <label class="full-span">门窗名字
+              <input id="openingNameInput" type="text" placeholder="例如：客厅门 / 卧室窗" />
+            </label>
+            <label>所在墙面
+              <select id="openingWallSelect"></select>
+            </label>
+            <label>偏移(m)
+              <input id="openingOffsetInput" type="number" min="0" step="0.1" />
+            </label>
+            <label class="full-span">宽度(m)
+              <input id="openingWidthInput" type="number" min="0.5" step="0.1" />
+            </label>
+          </div>
+          <div class="action-row-three">
+            <button id="addOpeningBtn">新增</button>
+            <button id="applyOpeningBtn">应用</button>
+            <button id="deleteOpeningBtn" class="danger">删除</button>
+          </div>
+        </div>
+
+        <div id="furnitureListPanel" class="side-list-panel">
+          <div class="side-list-head">
+            <strong id="popupFurnitureTitle">家具库</strong>
+            <span class="mini-text">先点卡片，再点 2D / 3D 场景放置</span>
+          </div>
+
+          <div class="library-tools">
+            <input id="furnitureSearchInput" type="text" placeholder="搜索家具，例如：沙发 / 床 / 马桶" />
+            <div id="furnitureCategoryTabs" class="library-tabs"></div>
+          </div>
+
+          <div id="placementHint" class="placement-hint">当前未进入待放置状态</div>
+          <div id="furnitureLibrary" class="furniture-library"></div>
+        </div>
+
+        <div id="furnitureEditorPanel" class="side-list-panel">
+          <div class="side-list-head">
+            <strong>家具编辑器</strong>
+            <span class="mini-text">选中场景里的家具后，可在下方精细修改</span>
+          </div>
+
+          <div class="grid two-col compact game-form">
+            <label class="full-span">当前家具
+              <select id="furnitureSelect"></select>
+            </label>
+            <label class="full-span">家具名字
+              <input id="furnitureLabelInput" type="text" placeholder="例如：沙发" />
+            </label>
+            <label>颜色
+              <input id="furnitureColorInput" type="color" value="#6f7d8c" />
+            </label>
+            <label>材质
+              <input id="furnitureMaterialInput" type="text" placeholder="例如：布艺" />
+            </label>
+            <label>宽度(m)
+              <input id="furnitureWidthInput" type="number" min="0.25" step="0.1" />
+            </label>
+            <label>进深(m)
+              <input id="furnitureDepthInput" type="number" min="0.25" step="0.1" />
+            </label>
+            <label>X 坐标(m)
+              <input id="furnitureXInput" type="number" step="0.1" />
+            </label>
+            <label>Y 坐标(m)
+              <input id="furnitureYInput" type="number" step="0.1" />
+            </label>
+            <label class="full-span">旋转(°)
+              <input id="furnitureRotationInput" type="number" min="0" max="359" step="15" />
+            </label>
+          </div>
+
+          <div class="action-row-three">
+            <button id="addFurnitureBtn">新增</button>
+            <button id="applyFurnitureBtn">应用</button>
+            <button id="deleteFurnitureBtn" class="danger">删除</button>
+          </div>
+        </div>
+      </section>
+
+    </aside>
+
+    <main class="workspace">
+      <section class="card workspace-top">
+        <div class="workspace-top-inner">
+          <div class="legend-row">
+            <span class="legend-chip"><span class="swatch room"></span>房间</span>
+            <span class="legend-chip"><span class="swatch opening"></span>门窗</span>
+            <span class="legend-chip"><span class="swatch furniture"></span>家具</span>
+            <span class="legend-chip"><span class="swatch selected"></span>当前选中</span>
+          </div>
+
+          <div class="feedback-panel">
+            <div class="feedback-item">
+              <span class="feedback-label">反馈情况</span>
+              <span id="messageBox" class="feedback-value"></span>
+            </div>
+            <div class="feedback-item subtle">
+              <span class="feedback-label">当前选中</span>
+              <span id="selectionInfo" class="feedback-value"></span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="view-grid">
+        <article class="card view-card plan-card">
+          <div class="card-head">
+            <div>
+              <h3>2D 平面视图</h3>
+              <!-- <p>点击家具后可直接用鼠标拖拽移动；拖动完成后视图不会自动复位 </p> -->
+            </div>
+            <div class="export-import-buttons">
+              <button id="exportImageBtn">导出为图片</button>
+              <button id="exportJsonBtn">导出为JSON</button>
+              <button id="importJsonBtn">导入</button>
+              <input type="file" id="importFileInput" accept=".json" style="display: none;" />
+            </div>
+          </div>
+
+          <div id="planStage" class="plan-stage">
+            <canvas id="planCanvas"></canvas>
+          </div>
+        </article>
+
+        <article class="card view-card three-card">
+          <div class="card-head">
+            <div>
+              <h3>3D 自由视图</h3>
+              <!-- <p>左键拖拽家具可移动，空白区域左键平移，右键旋转，滚轮缩放 </p> -->
+            </div>
+          </div>
+          <div id="threeContainer"></div>
+        </article>
+      </section>
+    </main>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
+  <script type="module" src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>
