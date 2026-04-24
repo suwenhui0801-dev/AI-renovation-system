@@ -4,15 +4,31 @@ import copy
 import json
 import os
 import re
+import time
+import uuid
+import base64
 import urllib.error
 import urllib.request
 from dataclasses import asdict, dataclass
 from typing import Dict, List, Optional
 
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, jsonify, render_template, request, url_for
 
 app = Flask(__name__)
+
+@app.errorhandler(Exception)
+def handle_unexpected_error(e):
+    import traceback
+    traceback.print_exc()
+    return jsonify({
+        "ok": False,
+        "message": f"服务器内部错误：{str(e)}"
+    }), 500
+
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+GENERATED_FLOORPLAN_DIR = os.path.join(BASE_DIR, "static", "generated_floorplans")
+os.makedirs(GENERATED_FLOORPLAN_DIR, exist_ok=True)
 
 # 火山方舟（Ark）配置：
 # 1) 推荐把真实 API Key 配到系统环境变量 ARK_API_KEY 中
@@ -110,7 +126,7 @@ FURNITURE_DEFAULTS: Dict[str, Dict] = {
         "color": "#d9d0c7", "material": "木纹",
         "category": "卧室家具", "group": "睡眠家具",
         "icon": "🛏️", "tags": ["卧室"], "score": "展示",
-        "rotationOffset": 90, "yOffset": 0
+        "rotationOffset": 0, "yOffset": 0
     },
     "bedDouble": {
         "label": "双人床", "model": "bedDouble.glb",
@@ -118,7 +134,7 @@ FURNITURE_DEFAULTS: Dict[str, Dict] = {
         "color": "#d9d0c7", "material": "布艺",
         "category": "卧室家具", "group": "睡眠家具",
         "icon": "🛏️", "tags": ["卧室"], "score": "高人气",
-        "rotationOffset": 90, "yOffset": 0
+        "rotationOffset": 0, "yOffset": 0
     },
     "bedSingle": {
         "label": "单人床", "model": "bedSingle.glb",
@@ -126,7 +142,7 @@ FURNITURE_DEFAULTS: Dict[str, Dict] = {
         "color": "#d9d0c7", "material": "布艺",
         "category": "卧室家具", "group": "睡眠家具",
         "icon": "🛏️", "tags": ["卧室"], "score": "常用",
-        "rotationOffset": 90, "yOffset": 0
+        "rotationOffset": 0, "yOffset": 0
     },
     "cabinetBed": {
         "label": "衣柜", "model": "cabinetBed.glb",
@@ -1061,16 +1077,17 @@ def delete_furniture(item: Furniture) -> str:
 def update_room(room: Room, payload: Dict) -> tuple[bool, str]:
     old = asdict(room)
 
-    for key in ["name", "x", "y", "width", "depth", "wall_color", "wall_material"]:
+    for key in ["name", "x", "y", "width", "depth", "height", "wall_color"]:
         if key not in payload:
             continue
         value = payload[key]
-        if key in {"x", "y", "width", "depth"}:
+        if key in {"x", "y", "width", "depth", "height"}:
             value = float(value)
         setattr(room, key, value)
 
     room.width = clamp(room.width, 1.6, float('inf'))
     room.depth = clamp(room.depth, 1.6, float('inf'))
+    room.height = clamp(room.height, 2.2, 6.0)
 
     for item in STATE.furnitures:
         if item.room_id == room.id:
@@ -1151,14 +1168,16 @@ def add_room(
     y: float,
     width: float,
     depth: float,
+    height: float = 3.0,
     wall_color: str = "#f0efe9",
     wall_material: str = "白色瓷砖",
 ) -> tuple[bool, str, Optional[Room]]:
     width = clamp(width, 1.6, 12.0)
     depth = clamp(depth, 1.6, 12.0)
+    height = clamp(height, 2.2, 6.0)
     room_x, room_y = find_available_room_position(width, depth, x, y)
     room_name = name or ROOM_TYPE_OPTIONS[min(len(STATE.rooms), len(ROOM_TYPE_OPTIONS) - 1)]
-    room = Room(next_id("room", STATE.rooms), room_name, room_x, room_y, width, depth, wall_color=wall_color, wall_material=wall_material)
+    room = Room(next_id("room", STATE.rooms), room_name, room_x, room_y, width, depth, height=height, wall_color=wall_color, wall_material=wall_material)
 
     overlap = room_overlaps(room)
     if overlap:
@@ -1484,6 +1503,7 @@ def api_import():
                     y=room_data.get("y", 0),
                     width=room_data.get("width", 3),
                     depth=room_data.get("depth", 3),
+                    height=clamp(float(room_data.get("height", 3.0)), 2.2, 6.0),
                     wall_color=room_data.get("wall_color", "#f0efe9"),
                     wall_material=room_data.get("wall_material", "白色瓷砖")
                 )
@@ -1623,6 +1643,7 @@ def api_add_room():
         float(payload.get("y", 0)),
         float(payload.get("width", 3.0)),
         float(payload.get("depth", 3.0)),
+        float(payload.get("height", 3.0)),
         payload.get("wall_color", "#f0efe9"),
         payload.get("wall_material", "白色瓷砖"),
     )
@@ -1699,25 +1720,134 @@ def api_delete_opening(opening_id: str):
 
 # AI生成户型图功能实现区域开始
 
+def save_generated_floorplan_image(image_url=None, b64_json=None):
+    """
+    将火山方舟生成的图片保存到本地 static/generated_floorplans，
+    避免前端直接加载外部临时图片 URL 导致破图。
+    """
+    filename = f"floorplan_{int(time.time())}_{uuid.uuid4().hex[:8]}.png"
+    save_path = os.path.join(GENERATED_FLOORPLAN_DIR, filename)
+
+    if b64_json:
+        try:
+            image_bytes = base64.b64decode(b64_json)
+            with open(save_path, "wb") as f:
+                f.write(image_bytes)
+            return url_for("static", filename=f"generated_floorplans/{filename}")
+        except Exception as e:
+            raise RuntimeError(f"保存 base64 户型图失败：{e}")
+
+    if image_url:
+        try:
+            headers = {
+                "User-Agent": "Mozilla/5.0",
+                "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+            }
+
+            response = requests.get(image_url, headers=headers, timeout=60)
+            if response.status_code >= 400:
+                raise RuntimeError(f"下载图片失败：{response.status_code} {response.text[:200]}")
+
+            content_type = response.headers.get("Content-Type", "")
+            if "image" not in content_type.lower():
+                # 有些临时链接不一定返回标准 content-type，所以这里只做弱校验
+                if not response.content or len(response.content) < 1000:
+                    raise RuntimeError(f"返回内容不是有效图片：{content_type}")
+
+            with open(save_path, "wb") as f:
+                f.write(response.content)
+
+            return url_for("static", filename=f"generated_floorplans/{filename}")
+        except Exception as e:
+            raise RuntimeError(f"保存远程户型图失败：{e}")
+
+    raise RuntimeError("没有可保存的户型图数据")
+
 # 调用火山引擎文生图API的函数
 def call_volcengine_image_api(params):
-    """
-    无 API 部署版本：
-    不调用真实文生图接口，避免 API Key 泄露和部署失败。
-    """
-    return {
-        "disabled": True,
-        "message": "当前为无 API 部署版本，文生图功能未启用。"
+    api_key = os.getenv("VOLCENGINE_API_KEY_IMAGE", "").strip()
+    model = os.getenv("DOUBAO_SEEDREAM_MODEL", "").strip()
+    base_url = os.getenv("VOLCENGINE_API_BASE", "https://ark.cn-beijing.volces.com/api/v3").rstrip("/")
+
+    if not api_key:
+        raise RuntimeError("缺少环境变量 VOLCENGINE_API_KEY_IMAGE")
+    if not model:
+        raise RuntimeError("缺少环境变量 DOUBAO_SEEDREAM_MODEL")
+
+    url = f"{base_url}/images/generations"
+
+    payload = {
+        "model": model,
+        "prompt": params.get("prompt", ""),
+        "size": params.get("size", "1920x1920"),
+        "response_format": "url"
     }
+
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json"
+    }
+
+    response = requests.post(url, headers=headers, json=payload, timeout=90)
+
+    if response.status_code >= 400:
+        raise RuntimeError(f"火山方舟文生图调用失败：{response.status_code} {response.text[:500]}")
+
+    return response.json()
 
 
 # 生成户型图
 def generate_floorplan(prompt):
-    """
-    无 API 部署版本：
-    保留接口，但不生成真实图片。
-    """
-    raise RuntimeError("当前为无 API 部署版本，AI参考图生成功能未启用。基础2D/3D装修功能可正常使用。")
+    final_prompt = f"""
+请根据以下需求生成一张清晰的室内户型参考图。
+
+用户需求：
+{prompt}
+
+要求：
+1. 俯视角平面户型图。
+2. 房间边界清晰。
+3. 家具布局清楚。
+4. 风格简洁，适合装修系统参考。
+5. 不要生成复杂文字，不要生成水印。
+"""
+
+    result = call_volcengine_image_api({
+        "prompt": final_prompt,
+        "size": "1920x1920"
+    })
+
+    image_url = None
+    b64_json = None
+
+    if isinstance(result, dict):
+        data = result.get("data") or []
+        if data and isinstance(data, list):
+            first = data[0] or {}
+            image_url = (
+                first.get("url")
+                or first.get("image_url")
+                or first.get("image")
+            )
+            b64_json = (
+                first.get("b64_json")
+                or first.get("base64")
+                or first.get("image_base64")
+            )
+
+    if not image_url and not b64_json:
+        raise RuntimeError(f"文生图接口返回中没有可用图片数据：{str(result)[:500]}")
+
+    local_image_url = save_generated_floorplan_image(
+        image_url=image_url,
+        b64_json=b64_json
+    )
+
+    return {
+        "image_url": local_image_url,
+        "source_image_url": image_url,
+        "raw": result
+    }
 
 
 # API接口：生成户型图
@@ -1731,7 +1861,11 @@ def api_generate_floorplan():
     
     try:
         result = generate_floorplan(prompt)
-        return jsonify({"ok": True, "result": result})
+        return jsonify({
+            "ok": True,
+            "result": result,
+            "image_url": result.get("image_url") if isinstance(result, dict) else result
+        })
     except Exception as e:
         return jsonify({"ok": False, "message": str(e)})
 
@@ -1774,6 +1908,163 @@ def call_volcengine_api(model, messages, temperature=0.7):
     }
 
 
+def image_url_to_base64(image_url):
+    """
+    将前端传来的图片地址转换成 base64。
+    支持：
+    1. data:image/...;base64,...
+    2. /static/generated_floorplans/xxx.png
+    3. `https://xxx/static/generated_floorplans/xxx.png`
+    4. 普通网络图片 URL
+    """
+    import base64
+    from urllib.parse import urlparse
+
+    if not image_url:
+        raise RuntimeError("图片地址为空")
+
+    if image_url.startswith("data:image/"):
+        return image_url.split(",", 1)[1]
+
+    parsed = urlparse(image_url)
+
+    # 情况1：前端传的是 /static/xxx.png
+    if image_url.startswith("/static/"):
+        relative_path = image_url.lstrip("/")
+        local_path = os.path.join(BASE_DIR, relative_path)
+
+        if not os.path.exists(local_path):
+            raise RuntimeError(f"本地图片不存在：{local_path}")
+
+        with open(local_path, "rb") as f:
+            return base64.b64encode(f.read()).decode("utf-8")
+
+    # 情况2：前端传的是完整 Render 地址，例如：
+    # `https://ai-renovation-system.onrender.com/static/generated_floorplans/xxx.png`
+    if parsed.path.startswith("/static/"):
+        relative_path = parsed.path.lstrip("/")
+        local_path = os.path.join(BASE_DIR, relative_path)
+
+        if os.path.exists(local_path):
+            with open(local_path, "rb") as f:
+                return base64.b64encode(f.read()).decode("utf-8")
+
+    # 情况3：普通外部网络图片
+    headers = {
+        "User-Agent": "Mozilla/5.0",
+        "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+    }
+
+    response = requests.get(image_url, headers=headers, timeout=60)
+
+    if response.status_code >= 400:
+        raise RuntimeError(f"下载图片失败：HTTP {response.status_code}")
+
+    if not response.content:
+        raise RuntimeError("下载到的图片内容为空")
+
+    return base64.b64encode(response.content).decode("utf-8")
+
+def normalize_ai_floorplan_result(data):
+    if not isinstance(data, dict):
+        raise RuntimeError("AI 返回结果不是 JSON 对象")
+
+    rooms = data.get("rooms") or []
+    furnitures = data.get("furnitures") or []
+    openings = data.get("openings") or []
+
+    if not isinstance(rooms, list):
+        rooms = []
+    if not isinstance(furnitures, list):
+        furnitures = []
+    if not isinstance(openings, list):
+        openings = []
+
+    if not rooms:
+        rooms = [
+            {
+                "id": "room_1",
+                "name": "客厅",
+                "x": 0,
+                "y": 0,
+                "width": 4.8,
+                "depth": 4.0,
+                "height": 3.0,
+                "wall_color": "#ede6d8",
+                "wall_material": "原木风"
+            }
+        ]
+
+    normalized_rooms = []
+    for index, room in enumerate(rooms):
+        if not isinstance(room, dict):
+            continue
+
+        normalized_rooms.append({
+            "id": str(room.get("id") or f"room_{index + 1}"),
+            "name": str(room.get("name") or f"房间{index + 1}"),
+            "x": float(room.get("x") or 0),
+            "y": float(room.get("y") or 0),
+            "width": max(1.0, float(room.get("width") or 3)),
+            "depth": max(1.0, float(room.get("depth") or 3)),
+            "height": clamp(float(room.get("height") or 3), 2.2, 6.0),
+            "wall_color": room.get("wall_color") or "#f0efe9",
+            "wall_material": room.get("wall_material") or "白色瓷砖",
+        })
+
+    default_room_id = normalized_rooms[0]["id"] if normalized_rooms else None
+
+    normalized_furnitures = []
+    for index, item in enumerate(furnitures):
+        if not isinstance(item, dict):
+            continue
+
+        normalized_furnitures.append({
+            "id": str(item.get("id") or f"furniture_{index + 1}"),
+            "type": item.get("type") or "loungeSofa",
+            "label": item.get("label") or "家具",
+            "room_id": item.get("room_id") or default_room_id,
+            "x": float(item.get("x") or 0),
+            "y": float(item.get("y") or 0),
+            "z": float(item.get("z") or 0),
+            "width": max(0.2, float(item.get("width") or 1)),
+            "depth": max(0.2, float(item.get("depth") or 1)),
+            "height": max(0.1, float(item.get("height") or 0.8)),
+            "rotation": float(item.get("rotation") or 0),
+            "color": item.get("color") or "#6f7d8c",
+            "material": item.get("material") or "布艺",
+            "placement": item.get("placement") or "floor",
+            "wall": item.get("wall") or None,
+            "wall_offset": float(item.get("wall_offset") or 0),
+            "mount_height": float(item.get("mount_height") or 1.5),
+        })
+
+    normalized_openings = []
+    for index, item in enumerate(openings):
+        if not isinstance(item, dict):
+            continue
+
+        normalized_openings.append({
+            "id": str(item.get("id") or f"opening_{index + 1}"),
+            "type": item.get("type") or "door",
+            "name": item.get("name") or "门窗",
+            "room_id": item.get("room_id") or default_room_id,
+            "wall": item.get("wall") or "top",
+            "offset": float(item.get("offset") or 0),
+            "width": max(0.4, float(item.get("width") or 1)),
+            "height": max(0.4, float(item.get("height") or 2.1)),
+            "sill": float(item.get("sill") or 0),
+            "color": item.get("color") or "#8b6a4d",
+            "material": item.get("material") or "木纹",
+        })
+
+    return {
+        "rooms": normalized_rooms,
+        "furnitures": normalized_furnitures,
+        "openings": normalized_openings,
+        "message": data.get("message") or "户型解析成功"
+    }
+
 # ======================
 # 【已修复】解析户型图（支持Base64，无损还原）
 # ======================
@@ -1802,7 +2093,7 @@ def parse_floorplan(image_base64):
             json.dump(data, f, ensure_ascii=False, indent=2)
     except OSError:
         pass
-    return data
+    return normalize_ai_floorplan_result(data)
 
 
 # ======================
@@ -1810,29 +2101,44 @@ def parse_floorplan(image_base64):
 # ======================
 @app.route('/api/ai/parse_floorplan', methods=['POST'])
 def api_parse_floorplan():
-    data = request.json
-    image_base64 = data.get('image_base64', '')
-    image_url = data.get('image_url', '')
-
-    # 【修复】优先用URL，后端下载
-    if image_url and not image_base64:
-        try:
-            import requests
-            img_response = requests.get(image_url)
-            import base64
-            image_base64 = base64.b64encode(img_response.content).decode('utf-8')
-        except Exception as e:
-            return jsonify({"ok": False, "message": f"后端下载图片失败：{str(e)}"})
-
-    if not image_base64:
-        return jsonify({"ok": False, "message": "缺少图片参数"})
-    
     try:
-        # 【已修复】调用解析函数
+        data = request.get_json(silent=True) or {}
+
+        image_base64 = data.get('image_base64', '') or ''
+        image_url = data.get('image_url', '') or ''
+
+        if image_base64.startswith('data:image/'):
+            image_base64 = image_base64.split(',', 1)[1]
+
+        if image_url and not image_base64:
+            try:
+                image_base64 = image_url_to_base64(image_url)
+            except Exception as e:
+                return jsonify({ 
+                    "ok": False, 
+                    "message": f"后端读取户型图失败：{str(e)}" 
+                }), 200
+
+        if not image_base64:
+            return jsonify({ 
+                "ok": False, 
+                "message": "缺少图片参数，请先生成或上传户型图。" 
+            }), 200
+
         result = parse_floorplan(image_base64)
-        return jsonify({"ok": True, "result": result})
+
+        return jsonify({ 
+            "ok": True, 
+            "result": result 
+        }), 200
+
     except Exception as e:
-        return jsonify({"ok": False, "message": str(e)})
+        import traceback
+        traceback.print_exc()
+        return jsonify({ 
+            "ok": False, 
+            "message": f"户型解析接口异常：{str(e)}" 
+        }), 200
 # AI解析户型图功能实现区域结束
 
 

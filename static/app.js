@@ -37,7 +37,7 @@ const el = {
   roomYInput: document.getElementById('roomYInput'),
   roomWidthInput: document.getElementById('roomWidthInput'),
   roomDepthInput: document.getElementById('roomDepthInput'),
-  roomMaterialSelect: document.getElementById('roomMaterialSelect'),
+  roomHeightInput: document.getElementById('roomHeightInput'),
   roomColorInput: document.getElementById('roomColorInput'),
   addRoomBtn: document.getElementById('addRoomBtn'),
   applyRoomBtn: document.getElementById('applyRoomBtn'),
@@ -248,6 +248,12 @@ function getWallLength(room, wall) {
 function clampWallOffset(room, wall, offset) {
   const length = getWallLength(room, wall);
   return clamp(Number(offset || 0), 0.05, Math.max(0.05, length - 0.05));
+}
+
+function clampMountHeight(room, height, fallback = 1.5) {
+  const roomHeight = Number(room?.height || 3);
+  const safeMax = Math.max(0.5, roomHeight - 0.25);
+  return clamp(Number(height || fallback), 0.3, safeMax);
 }
 
 function wallPlacementToWorld(room, wall, offset, mountHeight = 1.5) {
@@ -757,13 +763,12 @@ async function loadState() {
 function fillRoomForm(room) {
   if (!room) return;
   el.roomNameInput.value = room.name || '';
-  // el.roomTypeSelect.value = state.options.room_types.includes(room.name) ? room.name : state.options.room_types[0];
   el.roomXInput.value = room.x;
   el.roomYInput.value = room.y;
   el.roomWidthInput.value = room.width;
   el.roomDepthInput.value = room.depth;
-  el.roomMaterialSelect.value = room.wall_material;
-  el.roomColorInput.value = room.wall_color;
+  if (el.roomHeightInput) el.roomHeightInput.value = Number(room.height || 3).toFixed(1);
+  if (el.roomColorInput) el.roomColorInput.value = room.wall_color || '#f0efe9';
 }
 
 function fillOpeningForm(opening) {
@@ -822,7 +827,6 @@ function syncUI() {
   // el.redoBtn.disabled = !historyOptions.can_redo;
 
   // el.roomTypeSelect.innerHTML = state.options.room_types.map(v => `<option value="${v}">${v}</option>`).join('');
-  el.roomMaterialSelect.innerHTML = state.options.room_materials.map(v => `<option value="${v}">${v}</option>`).join('');
 
   // el.openingRoomSelect.innerHTML = roomOptions;
   // el.openingTypeSelect.innerHTML = state.options.opening_types.map(v => `<option value="${v.value}">${v.label}</option>`).join('');
@@ -903,7 +907,7 @@ function drawRoom(room, v) {
   const active = selected?.type === 'room' && selected?.id === room.id;
 
   ctx.save();
-  ctx.fillStyle = room.wall_color;
+  ctx.fillStyle = '#f7f3e8';
   ctx.strokeStyle = '#334155';
   ctx.lineWidth = 8;
   ctx.fillRect(x, y, w, h);
@@ -929,6 +933,7 @@ function drawRoom(room, v) {
   ctx.fillStyle = '#64748b';
   ctx.font = '12px "PingFang SC", sans-serif';
   ctx.fillText(`${room.width.toFixed(1)}m × ${room.depth.toFixed(1)}m`, x + 14, y + 44);
+  ctx.fillText(`墙高 ${Number(room.height || 3).toFixed(1)}m`, x + 14, y + 62);
   ctx.restore();
 }
 
@@ -1573,7 +1578,7 @@ async function buildFurnitureGroup(item) {
   if (isWallFurniture(item)) {
     const room = state?.rooms?.find(r => r.id === item.room_id);
     const wall = item.wall || 'top';
-    const mountHeight = Number(item.mount_height || config.defaultMountHeight || 1.5);
+    const mountHeight = clampMountHeight(room, item.mount_height || config.defaultMountHeight || 1.5, config.defaultMountHeight || 1.5);
     if (room) {
       const placement = wallPlacementToWorld(room, wall, item.wall_offset || 0.3, mountHeight);
       const inset = 0.055;
@@ -1828,15 +1833,15 @@ async function render3D() {
 
     const floor = new THREE.Mesh(
       new THREE.BoxGeometry(room.width, 0.06, room.depth),
-      materialFromName(room.wall_color, room.wall_material)
+      materialFromName('#d8d0bd', '木纹')
     );
     floor.position.set(room.x + room.width / 2, 0.03, room.y + room.depth / 2);
     floor.receiveShadow = true;
     group.add(floor);
 
-    const wallMaterial = materialFromName('#d7d8dd', '白色瓷砖');
+    const wallMaterial = materialFromName(room.wall_color || '#d7d8dd', '白色瓷砖');
     const t = 0.08;
-    const h = room.height;
+    const h = Number(room.height || 3);
     const walls = [
       [room.width, h, t, room.x + room.width / 2, h / 2, room.y],
       [room.width, h, t, room.x + room.width / 2, h / 2, room.y + room.depth],
@@ -2205,7 +2210,7 @@ async function placePendingFurnitureOnWall(roomId, wall, wallOffset) {
   const room = state?.rooms?.find(r => r.id === roomId);
   if (!meta || !room || !meta.wallMount) return;
   const offset = clampWallOffset(room, wall, wallOffset);
-  const mountHeight = Number(meta.defaultMountHeight || meta.yOffset || 1.5);
+  const mountHeight = clampMountHeight(room, meta.defaultMountHeight || meta.yOffset || 1.5, 1.5);
   const placement = wallPlacementToWorld(room, wall, offset, mountHeight);
   const data = await request('/api/furniture', {
     method: 'POST',
@@ -2438,13 +2443,15 @@ el.planCanvas.addEventListener('mousemove', evt => {
       const room = hitRoom(point.x, point.y) || state.rooms.find(r => r.id === item.room_id);
       if (room) {
         const wallHit = nearestWallFromPoint(room, rx, ry);
-        const p = wallPlacementToWorld(room, wallHit.wall, wallHit.offset, item.mount_height || 1.5);
+        const safeMountHeight = clampMountHeight(room, item.mount_height || 1.5, 1.5);
+        const p = wallPlacementToWorld(room, wallHit.wall, wallHit.offset, safeMountHeight);
         item.room_id = room.id;
         item.wall = wallHit.wall;
         item.wall_offset = +wallHit.offset.toFixed(2);
         item.x = +p.x.toFixed(2);
         item.y = +p.y.toFixed(2);
         item.rotation = p.rotation;
+        item.mount_height = +safeMountHeight.toFixed(2);
       }
     } else {
       item.x = +(rx - drag.dx).toFixed(1);
@@ -2503,8 +2510,8 @@ window.addEventListener('mouseup', async () => {
     await request(`/api/room/${dragId}`, {
       method: 'PATCH',
       body: JSON.stringify({
-        x: room.x, y: room.y, width: room.width, depth: room.depth,
-        name: room.name, wall_color: room.wall_color, wall_material: room.wall_material,
+        x: room.x, y: room.y, width: room.width, depth: room.depth, height: Number(room.height || 3),
+        name: room.name, wall_color: room.wall_color,
       })
     });
   } else if (dragKind === 'furniture' && item) {
@@ -2569,7 +2576,7 @@ async function applyRoomForm(isNew = false) {
     y: parseFloat(el.roomYInput.value || 0),
     width: parseFloat(el.roomWidthInput.value || 3),
     depth: parseFloat(el.roomDepthInput.value || 3),
-    wall_material: el.roomMaterialSelect.value,
+    height: clamp(parseFloat(el.roomHeightInput?.value || 3), 2.2, 6),
     wall_color: el.roomColorInput.value,
   });
   const roomId = selectedRoom()?.id || state.rooms[0]?.id;
@@ -3920,8 +3927,7 @@ function initAIFloorplanModule() {
             depth: Number(room.depth || 3),
             height: Number(room.height || 3),
             wall_color: room.wall_color || '#f0efe9',
-            wall_material: room.wall_material || '白色瓷砖',
-          }));
+                      }));
 
           const normalizedFurnitures = (parseResult.furnitures || []).map((item, index) => ({
             id: item.id || `furniture_${index + 1}`,
