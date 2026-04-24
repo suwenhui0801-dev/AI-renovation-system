@@ -3937,7 +3937,17 @@ function initAIFloorplanModule() {
       });
       
       console.log('API响应状态:', response.status);
-      const result = await response.json();
+
+      const responseText = await response.text();
+      let result;
+
+      try {
+        result = JSON.parse(responseText);
+      } catch (e) {
+        console.error('解析接口返回的不是JSON，原始内容:', responseText.slice(0, 800));
+        throw new Error(`解析接口返回异常，HTTP ${response.status}`);
+      }
+
       console.log('API响应结果:', result);
       if (result.ok) {
         // 解析结果
@@ -3972,6 +3982,10 @@ function initAIFloorplanModule() {
             rotation: Number(item.rotation || 0),
             color: item.color || '#6f7d8c',
             material: item.material || '布艺',
+            placement: item.placement || 'floor',
+            wall: item.wall || null,
+            wall_offset: Number(item.wall_offset || 0),
+            mount_height: Number(item.mount_height || 1.5),
           }));
 
           const normalizedOpenings = (parseResult.openings || []).map((item, index) => ({
@@ -4035,8 +4049,9 @@ function initAIFloorplanModule() {
       }
     } catch (error) {
       console.error('应用户型失败:', error);
-      el.floorplanStatusText.textContent = '应用失败，请重试';
-      setMessage('户型应用失败', 'error');
+      const msg = error?.message || '未知错误';
+      el.floorplanStatusText.textContent = `应用失败：${msg}`;
+      setMessage(`户型应用失败：${msg}`, 'error');
     }
   });
 }

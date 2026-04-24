@@ -1997,8 +1997,7 @@ def call_volcengine_api(model, messages, temperature=0.2, max_tokens=2048):
         "model": model,
         "messages": messages,
         "temperature": temperature,
-        "max_tokens": max_tokens,
-        "response_format": {"type": "json_object"}
+        "max_tokens": max_tokens
     }
 
     headers = {
@@ -2337,40 +2336,46 @@ def api_parse_floorplan():
     try:
         data = request.get_json(silent=True) or {}
 
-        image_base64 = data.get('image_base64', '') or ''
-        image_url = data.get('image_url', '') or ''
+        image_base64 = (data.get("image_base64") or "").strip()
+        image_url = (data.get("image_url") or "").strip()
 
-        if image_base64.startswith('data:image/'):
-            image_base64 = image_base64.split(',', 1)[1]
+        if image_base64.startswith("data:image/"):
+            image_base64 = image_base64.split(",", 1)[1]
 
         if image_url and not image_base64:
             try:
                 image_base64 = image_url_to_base64(image_url)
             except Exception as e:
-                return jsonify({ 
-                    "ok": False, 
-                    "message": f"后端读取户型图失败：{str(e)}" 
+                return jsonify({
+                    "ok": False,
+                    "message": f"后端读取户型图失败：{str(e)}"
                 }), 200
 
         if not image_base64:
-            return jsonify({ 
-                "ok": False, 
-                "message": "缺少图片参数，请先生成或上传户型图。" 
+            return jsonify({
+                "ok": False,
+                "message": "缺少图片参数，请先生成或上传户型图。"
             }), 200
 
-        result = parse_floorplan(image_base64)
+        try:
+            result = parse_floorplan(image_base64)
+        except Exception as e:
+            return jsonify({
+                "ok": False,
+                "message": f"AI解析户型图失败：{str(e)}"
+            }), 200
 
-        return jsonify({ 
-            "ok": True, 
-            "result": result 
+        return jsonify({
+            "ok": True,
+            "result": result
         }), 200
 
     except Exception as e:
         import traceback
         traceback.print_exc()
-        return jsonify({ 
-            "ok": False, 
-            "message": f"户型解析接口异常：{str(e)}" 
+        return jsonify({
+            "ok": False,
+            "message": f"户型解析接口异常：{str(e)}"
         }), 200
 # AI解析户型图功能实现区域结束
 
