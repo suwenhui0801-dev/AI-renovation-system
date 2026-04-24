@@ -207,8 +207,8 @@ FURNITURE_DEFAULTS: Dict[str, Dict] = {
         "width": 0.2, "depth": 0.2, "height": 0.4,
         "color": "#c49a6c", "material": "金属",
         "category": "客厅家具", "group": "灯具",
-        "icon": "💡", "tags": ["客厅", "墙面"], "score": "搭配",
-        "rotationOffset": 0, "yOffset": 1.5
+        "icon": "💡", "tags": ["客厅", "墙面", "上墙"], "score": "墙面",
+        "rotationOffset": 0, "yOffset": 1.5, "wallMount": True, "defaultMountHeight": 1.65
     },
     "tableCoffee": {
         "label": "茶几", "model": "tableCoffee.glb",
@@ -424,8 +424,8 @@ FURNITURE_DEFAULTS: Dict[str, Dict] = {
         "width": 1.4, "depth": 0.4, "height": 0.68,
         "color": "#2b3038", "material": "木纹",
         "category": "其他物品", "group": "收纳",
-        "icon": "📺", "tags": ["客厅", "收纳"], "score": "常用",
-        "rotationOffset": 0, "yOffset": 0
+        "icon": "📺", "tags": ["客厅", "收纳", "可上墙"], "score": "常用",
+        "rotationOffset": 0, "yOffset": 0, "wallMount": True, "defaultMountHeight": 1.25
     },
     "cabinetTelevisionDoors": {
         "label": "带门电视柜", "model": "cabinetTelevisionDoors.glb",
@@ -668,6 +668,10 @@ class Furniture:
     rotation: float
     color: str
     material: str
+    placement: str = "floor"
+    wall: Optional[str] = None
+    wall_offset: float = 0.0
+    mount_height: float = 1.5
 
 
 @dataclass
@@ -771,6 +775,8 @@ class GameState:
                         "score": meta.get("score", "基础"),
                         "rotationOffset": meta.get("rotationOffset", 0),
                         "yOffset": meta.get("yOffset", 0),
+                        "wallMount": bool(meta.get("wallMount", False)),
+                        "defaultMountHeight": meta.get("defaultMountHeight", meta.get("yOffset", 1.5)),
                     }
                     for ftype, meta in FURNITURE_DEFAULTS.items()
                 ],
@@ -825,6 +831,9 @@ def get_furniture_footprint(item: Furniture) -> tuple[float, float]:
 
 
 def clamp_furniture_inside_room(item: Furniture) -> None:
+    if is_wall_furniture(item):
+        clamp_wall_furniture(item)
+        return
     room = room_by_id(item.room_id)
     if not room:
         return
@@ -834,9 +843,11 @@ def clamp_furniture_inside_room(item: Furniture) -> None:
 
 
 def collides(item: Furniture) -> bool:
+    if is_wall_furniture(item):
+        return False
     fw, fd = get_furniture_footprint(item)
     for other in STATE.furnitures:
-        if other.id == item.id or other.room_id != item.room_id:
+        if other.id == item.id or other.room_id != item.room_id or is_wall_furniture(other):
             continue
         ow, od = get_furniture_footprint(other)
         if not (item.x + fw <= other.x or other.x + ow <= item.x or item.y + fd <= other.y or other.y + od <= item.y):
@@ -903,6 +914,45 @@ def clamp_opening(opening: Opening) -> None:
     opening.offset = clamp(opening.offset, 0.0, max(0.0, wall_len - opening.width))
 
 
+def wall_length(room: Room, wall: str) -> float:
+    return room.width if wall in {"top", "bottom"} else room.depth
+
+
+def normalize_wall(value: Optional[str]) -> str:
+    return value if value in WALLS else "top"
+
+
+def clamp_wall_furniture(item: Furniture) -> None:
+    room = room_by_id(item.room_id)
+    if not room:
+        return
+    item.wall = normalize_wall(item.wall)
+    length = wall_length(room, item.wall)
+    item.wall_offset = clamp(float(item.wall_offset or 0), 0.05, max(0.05, length - 0.05))
+    item.mount_height = clamp(float(item.mount_height or 1.5), 0.25, max(0.25, room.height - 0.15))
+    item.placement = "wall"
+    if item.wall == "top":
+        item.x = room.x + item.wall_offset
+        item.y = room.y
+        item.rotation = 0
+    elif item.wall == "bottom":
+        item.x = room.x + item.wall_offset
+        item.y = room.y + room.depth
+        item.rotation = 180
+    elif item.wall == "left":
+        item.x = room.x
+        item.y = room.y + item.wall_offset
+        item.rotation = 90
+    else:
+        item.x = room.x + room.width
+        item.y = room.y + item.wall_offset
+        item.rotation = 270
+
+
+def is_wall_furniture(item: Furniture) -> bool:
+    return getattr(item, "placement", "floor") == "wall"
+
+
 def add_furniture(
     room: Room,
     ftype: str,
@@ -914,6 +964,10 @@ def add_furniture(
     depth: Optional[float] = None,
     rotation: float = 0.0,
     label: Optional[str] = None,
+    placement: str = "floor",
+    wall: Optional[str] = None,
+    wall_offset: Optional[float] = None,
+    mount_height: Optional[float] = None,
 ) -> tuple[bool, str, Optional[Furniture]]:
     if ftype not in FURNITURE_DEFAULTS:
         return False, "家具类型不存在。", None
@@ -933,15 +987,22 @@ def add_furniture(
         rotation=normalize_rotation(rotation),
         color=color or meta["color"],
         material=material or meta["material"],
+        placement="wall" if placement == "wall" and meta.get("wallMount") else "floor",
+        wall=normalize_wall(wall),
+        wall_offset=float(wall_offset if wall_offset is not None else 0.3),
+        mount_height=float(mount_height if mount_height is not None else meta.get("defaultMountHeight", meta.get("yOffset", 1.5))),
     )
 
-    clamp_furniture_inside_room(item)
-    snap_furniture(item)
-    if collides(item):
-        return False, f"{item.label}放置失败：与其他家具重叠。", None
+    if item.placement == "wall":
+        clamp_wall_furniture(item)
+    else:
+        clamp_furniture_inside_room(item)
+        snap_furniture(item)
+        if collides(item):
+            return False, f"{item.label}放置失败：与其他家具重叠。", None
 
     STATE.furnitures.append(item)
-    return True, f"已添加{item.label}。", item
+    return True, f"已添加{item.label}{'（墙面）' if item.placement == 'wall' else ''}。", item
 
 
 def update_furniture(item: Furniture, payload: Dict) -> tuple[bool, str]:
@@ -959,11 +1020,11 @@ def update_furniture(item: Furniture, payload: Dict) -> tuple[bool, str]:
         if "material" not in payload:
             item.material = meta["material"]
 
-    for key in ["label", "x", "y", "width", "depth", "rotation", "color", "material"]:
+    for key in ["label", "x", "y", "width", "depth", "rotation", "color", "material", "placement", "wall", "wall_offset", "mount_height"]:
         if key not in payload:
             continue
         value = payload[key]
-        if key in {"x", "y", "width", "depth", "rotation"}:
+        if key in {"x", "y", "width", "depth", "rotation", "wall_offset", "mount_height"}:
             value = float(value)
         setattr(item, key, value)
 
@@ -971,13 +1032,18 @@ def update_furniture(item: Furniture, payload: Dict) -> tuple[bool, str]:
     item.depth = clamp(item.depth, 0.25, 5.0)
     item.rotation = normalize_rotation(item.rotation)
 
-    fw, fd = get_furniture_footprint(item)
-    center_room = find_room_for_point(item.x + fw / 2, item.y + fd / 2)
-    if center_room:
-        item.room_id = center_room.id
-
-    clamp_furniture_inside_room(item)
-    snap_furniture(item)
+    if item.placement == "wall":
+        if item.type not in FURNITURE_DEFAULTS or not FURNITURE_DEFAULTS[item.type].get("wallMount"):
+            item.placement = "floor"
+        else:
+            clamp_wall_furniture(item)
+    if item.placement != "wall":
+        fw, fd = get_furniture_footprint(item)
+        center_room = find_room_for_point(item.x + fw / 2, item.y + fd / 2)
+        if center_room:
+            item.room_id = center_room.id
+        clamp_furniture_inside_room(item)
+        snap_furniture(item)
 
     if collides(item):
         for k, v in old.items():
@@ -1435,21 +1501,31 @@ def api_import():
                     print(f"跳过未知家具类型: {furniture_type}")
                     continue
 
+                meta = FURNITURE_DEFAULTS[furniture_type]
                 furniture = Furniture(
-                    id=furniture_data.get("id"),
+                    id=furniture_data.get("id") or next_id("furniture", STATE.furnitures),
                     type=furniture_type,
-                    label=furniture_data.get("label", "家具"),
+                    label=furniture_data.get("label", meta.get("label", "家具")),
                     room_id=furniture_data.get("room_id") or (STATE.rooms[0].id if STATE.rooms else None),
-                    x=furniture_data.get("x", 0),
-                    y=furniture_data.get("y", 0),
-                    z=furniture_data.get("z", 0),
-                    width=furniture_data.get("width", 1),
-                    depth=furniture_data.get("depth", 1),
-                    height=furniture_data.get("height", 0.8),
-                    rotation=furniture_data.get("rotation", 0),
-                    color=furniture_data.get("color", "#6f7d8c"),
-                    material=furniture_data.get("material", "布艺")
+                    x=float(furniture_data.get("x", 0)),
+                    y=float(furniture_data.get("y", 0)),
+                    z=float(furniture_data.get("z", 0)),
+                    width=float(furniture_data.get("width", meta.get("width", 1))),
+                    depth=float(furniture_data.get("depth", meta.get("depth", 1))),
+                    height=float(furniture_data.get("height", meta.get("height", 0.8))),
+                    rotation=float(furniture_data.get("rotation", 0)),
+                    color=furniture_data.get("color", meta.get("color", "#6f7d8c")),
+                    material=furniture_data.get("material", meta.get("material", "布艺")),
+                    placement=furniture_data.get("placement", "floor"),
+                    wall=furniture_data.get("wall"),
+                    wall_offset=float(furniture_data.get("wall_offset", 0.3)),
+                    mount_height=float(furniture_data.get("mount_height", meta.get("defaultMountHeight", meta.get("yOffset", 1.5)))),
                 )
+                if furniture.placement == "wall" and meta.get("wallMount"):
+                    clamp_wall_furniture(furniture)
+                else:
+                    furniture.placement = "floor"
+                    clamp_furniture_inside_room(furniture)
                 STATE.furnitures.append(furniture)
         
         # 导入门窗
@@ -1459,7 +1535,7 @@ def api_import():
                     id=opening_data.get("id"),
                     type=opening_data.get("type", "door"),
                     name=opening_data.get("name", "门窗"),
-                    room_id=opening_data.get("room_id"),
+                    room_id=opening_data.get("room_id") or (STATE.rooms[0].id if STATE.rooms else None),
                     wall=opening_data.get("wall", "top"),
                     offset=opening_data.get("offset", 0),
                     width=opening_data.get("width", 1),
@@ -1504,6 +1580,10 @@ def api_add_furniture():
         payload.get("depth"),
         float(payload.get("rotation", 0)),
         payload.get("label"),
+        payload.get("placement", "floor"),
+        payload.get("wall"),
+        payload.get("wall_offset"),
+        payload.get("mount_height"),
     )
     STATE.message = msg
     return jsonify({"ok": ok, "message": msg, "item": asdict(item) if item else None, "state": STATE.to_dict()})

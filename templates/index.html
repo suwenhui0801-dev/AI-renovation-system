@@ -242,10 +242,18 @@
           <div class="card-head">
             <div>
               <h3>3D 自由视图</h3>
-              <!-- <p>左键拖拽家具可移动，空白区域左键平移，右键旋转，滚轮缩放 </p> -->
+              <p>编辑模式支持拖拽摆放；第一人称支持鼠标查看、WASD 移动、ESC 退出</p>
             </div>
           </div>
-          <div id="threeContainer"></div>
+
+          <div class="three-toolbar">
+            <button id="firstPersonBtn" type="button" class="switch-btn secondary">进入第一人称</button>
+            <button id="editModeBtn" type="button" class="switch-btn secondary active">编辑模式</button>
+          </div>
+
+          <div id="threeContainer">
+            <div id="firstPersonHint" class="first-person-hint">鼠标查看 · WASD 移动 · 可穿墙进入其他房间 · ESC 退出</div>
+          </div>
         </article>
       </section>
     </main>

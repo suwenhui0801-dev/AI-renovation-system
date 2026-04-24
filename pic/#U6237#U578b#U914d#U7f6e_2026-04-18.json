@@ -182,7 +182,7 @@
     }
   ],
   "grid_size_m": 0.5,
-  "message": "欢迎来到装修小游戏工作台 ",
+  "message": "欢迎来到装修小游戏工作台。",
   "openings": [
     {
       "color": "#8b5a2b",

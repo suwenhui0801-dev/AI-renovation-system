@@ -1,11 +1,15 @@
 import * as THREE from 'https://unpkg.com/three@0.160.0/build/three.module.js';
 import { OrbitControls } from 'https://unpkg.com/three@0.160.0/examples/jsm/controls/OrbitControls.js?module';
+import { PointerLockControls } from 'https://unpkg.com/three@0.160.0/examples/jsm/controls/PointerLockControls.js?module';
 import { GLTFLoader } from 'https://unpkg.com/three@0.160.0/examples/jsm/loaders/GLTFLoader.js?module';
 
 const el = {
   planCanvas: document.getElementById('planCanvas'),
   planStage: document.getElementById('planStage'),
   threeContainer: document.getElementById('threeContainer'),
+  firstPersonBtn: document.getElementById('firstPersonBtn'),
+  editModeBtn: document.getElementById('editModeBtn'),
+  firstPersonHint: document.getElementById('firstPersonHint'),
   messageBox: document.getElementById('messageBox'),
   selectionInfo: document.getElementById('selectionInfo'),
   commandInput: document.getElementById('commandInput'),
@@ -137,6 +141,12 @@ let scene;
 let camera;
 let renderer;
 let controls;
+let fpControls;
+let isFirstPersonMode = false;
+let firstPersonClock;
+const FIRST_PERSON_HEIGHT = 1.65;
+const firstPersonKeys = { forward: false, backward: false, left: false, right: false };
+let savedOrbitView = null;
 let raycaster;
 let pointer;
 let fitCameraPending = true;
@@ -218,7 +228,46 @@ function getFurnitureModelConfig(type) {
     url: `/static/models/${meta.model}`,
     rotationOffset: Number(meta.rotationOffset || 0),
     yOffset: Number(meta.yOffset || 0),
+    wallMount: !!meta.wallMount,
+    defaultMountHeight: Number(meta.defaultMountHeight || meta.yOffset || 1.5),
   };
+}
+
+function isWallMountableType(type) {
+  return !!getFurnitureMeta(type)?.wallMount;
+}
+
+function isWallFurniture(item) {
+  return item?.placement === 'wall';
+}
+
+function getWallLength(room, wall) {
+  return (wall === 'top' || wall === 'bottom') ? room.width : room.depth;
+}
+
+function clampWallOffset(room, wall, offset) {
+  const length = getWallLength(room, wall);
+  return clamp(Number(offset || 0), 0.05, Math.max(0.05, length - 0.05));
+}
+
+function wallPlacementToWorld(room, wall, offset, mountHeight = 1.5) {
+  const safeOffset = clampWallOffset(room, wall, offset);
+  if (wall === 'top') return { x: room.x + safeOffset, y: room.y, z: room.y, rotation: 0, wallOffset: safeOffset };
+  if (wall === 'bottom') return { x: room.x + safeOffset, y: room.y + room.depth, z: room.y + room.depth, rotation: 180, wallOffset: safeOffset };
+  if (wall === 'left') return { x: room.x, y: room.y + safeOffset, z: room.y + safeOffset, rotation: 90, wallOffset: safeOffset };
+  return { x: room.x + room.width, y: room.y + safeOffset, z: room.y + safeOffset, rotation: 270, wallOffset: safeOffset };
+}
+
+function nearestWallFromPoint(room, x, y) {
+  const distances = [
+    { wall: 'top', d: Math.abs(y - room.y), offset: x - room.x },
+    { wall: 'bottom', d: Math.abs(y - (room.y + room.depth)), offset: x - room.x },
+    { wall: 'left', d: Math.abs(x - room.x), offset: y - room.y },
+    { wall: 'right', d: Math.abs(x - (room.x + room.width)), offset: y - room.y },
+  ];
+  distances.sort((a, b) => a.d - b.d);
+  const hit = distances[0];
+  return { wall: hit.wall, offset: clampWallOffset(room, hit.wall, hit.offset), distance: hit.d };
 }
 
 function furnitureFootprint(item) {
@@ -604,6 +653,7 @@ function renderFurnitureLibrary() {
         </div>
         <div class="furniture-list-meta">
           ${Number(item.width || 1).toFixed(1)}m × ${Number(item.depth || 1).toFixed(1)}m
+          ${item.wallMount ? '<span class="wall-mount-pill">可上墙</span>' : ''}
         </div>
       </div>
     `;
@@ -622,7 +672,9 @@ function renderFurnitureLibrary() {
 
       if (pendingPlacementType) {
         const meta = getFurnitureMeta(type);
-        setMessage(`已选中${meta?.label || '家具'}，请点击 2D 或 3D 场景中的房间位置放置 `, 'info');
+        setMessage(meta?.wallMount
+          ? `已选中${meta?.label || '家具'}，请点击 2D 房间边线或 3D 墙面进行上墙摆放`
+          : `已选中${meta?.label || '家具'}，请点击 2D 或 3D 场景中的房间位置放置`, 'info');
       }
     };
   });
@@ -637,7 +689,9 @@ function updatePlacementHint() {
     el.placementHint.classList.remove('active');
     return;
   }
-  el.placementHint.textContent = `待放置：${meta.label} · ${meta.width.toFixed(1)}m × ${meta.depth.toFixed(1)}m · 点击房间即可落位`;
+  el.placementHint.textContent = meta.wallMount
+    ? `待放置：${meta.label} · 墙面摆放模式 · 点击2D房间边线或3D墙面放置`
+    : `待放置：${meta.label} · ${meta.width.toFixed(1)}m × ${meta.depth.toFixed(1)}m · 点击房间即可落位`;
   el.placementHint.classList.add('active');
 }
 
@@ -651,18 +705,20 @@ async function request(url, options = {}) {
     state = data.state;
     if (shouldAutoFit) fitCameraPending = true;
 
-    // 每次状态更新后，把 2D 视图拉回中心
-    planPanX = 0;
-    planPanY = 0;
-    planZoom = 1;
+    if (shouldAutoFit) {
+      planPanX = 0;
+      planPanY = 0;
+      planZoom = 1;
+    }
   } else if (data.rooms) {
     state = data;
     if (shouldAutoFit) fitCameraPending = true;
 
-    // 每次状态更新后，把 2D 视图拉回中心
-    planPanX = 0;
-    planPanY = 0;
-    planZoom = 1;
+    if (shouldAutoFit) {
+      planPanX = 0;
+      planPanY = 0;
+      planZoom = 1;
+    }
   }
 
   if (data.message || state?.message) setMessage(data.message || state.message, response.ok && data.ok === false ? 'error' : null);
@@ -689,6 +745,8 @@ async function loadState() {
   planZoom = 1;
 
   initThree();
+  resizeCanvas();
+  resize3DRenderer();
   syncUI();
   render2D();
   render3D();
@@ -1045,6 +1103,37 @@ function drawBathSymbol(x, y, w, h) {
 }
 
 function drawFurniture(item, v) {
+  if (isWallFurniture(item)) {
+    const room = state?.rooms?.find(r => r.id === item.room_id);
+    if (!room) return;
+    const wall = item.wall || 'top';
+    const offset = clampWallOffset(room, wall, item.wall_offset || 0.3);
+    const center = wallPlacementToWorld(room, wall, offset, item.mount_height || 1.5);
+    const cx = toCanvasX(center.x, v);
+    const cy = toCanvasY(center.y, v);
+    const horizontal = wall === 'top' || wall === 'bottom';
+    const len = Math.max(20, (horizontal ? item.width : item.depth) * v.scale);
+    const active = selected?.type === 'furniture' && selected?.id === item.id;
+    ctx.save();
+    ctx.lineCap = 'round';
+    ctx.strokeStyle = active ? '#ef4444' : '#3165f5';
+    ctx.lineWidth = active ? 5 : 4;
+    ctx.beginPath();
+    if (horizontal) {
+      ctx.moveTo(cx - len / 2, cy);
+      ctx.lineTo(cx + len / 2, cy);
+    } else {
+      ctx.moveTo(cx, cy - len / 2);
+      ctx.lineTo(cx, cy + len / 2);
+    }
+    ctx.stroke();
+    ctx.fillStyle = active ? '#7f1d1d' : '#1d4ed8';
+    ctx.font = 'bold 12px "PingFang SC", sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(item.label, cx, cy - 8);
+    ctx.restore();
+    return;
+  }
   const fp = furnitureFootprint(item);
   const x = toCanvasX(item.x, v);
   const y = toCanvasY(item.y, v);
@@ -1136,7 +1225,15 @@ function drawPlacementPreview(v) {
     rotation: 0,
     color: meta.color,
     material: meta.material,
+    placement: previewState.hoverPlacement.placement || 'floor',
+    wall: previewState.hoverPlacement.wall,
+    wall_offset: previewState.hoverPlacement.wall_offset,
+    mount_height: meta.defaultMountHeight || meta.yOffset || 1.5,
   };
+  if (item.placement === 'wall') {
+    drawFurniture(item, v);
+    return;
+  }
   applyFurnitureLocalPlacement(item);
 
   const fp = furnitureFootprint(item);
@@ -1231,6 +1328,25 @@ function initThree() {
   controls.mouseButtons.RIGHT = THREE.MOUSE.ROTATE;
   controls.update();
 
+  fpControls = new PointerLockControls(camera, renderer.domElement);
+  firstPersonClock = new THREE.Clock();
+  fpControls.addEventListener('lock', () => {
+    isFirstPersonMode = true;
+    controls.enabled = false;
+    el.threeContainer?.classList.add('first-person-active');
+    el.firstPersonBtn?.classList.add('active');
+    el.editModeBtn?.classList.remove('active');
+    setMessage('已进入第一人称：鼠标查看，WASD 移动，可穿墙进入其他房间，ESC 退出', 'info');
+  });
+  fpControls.addEventListener('unlock', () => {
+    isFirstPersonMode = false;
+    controls.enabled = true;
+    el.threeContainer?.classList.remove('first-person-active');
+    el.firstPersonBtn?.classList.remove('active');
+    el.editModeBtn?.classList.add('active');
+    Object.keys(firstPersonKeys).forEach(key => { firstPersonKeys[key] = false; });
+  });
+
   raycaster = new THREE.Raycaster();
   pointer = new THREE.Vector2();
 
@@ -1260,10 +1376,85 @@ function initThree() {
 
   const animate = () => {
     requestAnimationFrame(animate);
-    controls.update();
+    const delta = firstPersonClock ? firstPersonClock.getDelta() : 0.016;
+    if (isFirstPersonMode) updateFirstPersonMovement(delta);
+    else controls.update();
     renderer.render(scene, camera);
   };
   animate();
+}
+
+function resize3DRenderer() {
+  if (!renderer || !camera || !el.threeContainer) return;
+  const w = Math.max(1, el.threeContainer.clientWidth);
+  const h = Math.max(1, el.threeContainer.clientHeight);
+  renderer.setSize(w, h, false);
+  camera.aspect = w / h;
+  camera.updateProjectionMatrix();
+}
+
+function getPlanBoundsWithMargin(margin = 0.45) {
+  if (!state?.rooms?.length) return null;
+  return {
+    minX: Math.min(...state.rooms.map(room => Number(room.x || 0))) - margin,
+    maxX: Math.max(...state.rooms.map(room => Number(room.x || 0) + Number(room.width || 0))) + margin,
+    minZ: Math.min(...state.rooms.map(room => Number(room.y || 0))) - margin,
+    maxZ: Math.max(...state.rooms.map(room => Number(room.y || 0) + Number(room.depth || 0))) + margin,
+  };
+}
+
+function limitFirstPersonToPlanBounds(position) {
+  const bounds = getPlanBoundsWithMargin(0.55);
+  if (!bounds) return position;
+  position.x = clamp(position.x, bounds.minX, bounds.maxX);
+  position.z = clamp(position.z, bounds.minZ, bounds.maxZ);
+  return position;
+}
+
+function enterFirstPersonMode() {
+  if (!fpControls || !camera || !state?.rooms?.length) return;
+  savedOrbitView = {
+    position: camera.position.clone(),
+    target: controls?.target?.clone(),
+  };
+  const room = selectedRoom() || state.rooms[0];
+  camera.position.set(room.x + room.width / 2, FIRST_PERSON_HEIGHT, room.y + room.depth / 2);
+  camera.rotation.set(0, 0, 0);
+  fpControls.lock();
+}
+
+function exitFirstPersonMode() {
+  if (fpControls?.isLocked) fpControls.unlock();
+  if (savedOrbitView && camera && controls) {
+    camera.position.copy(savedOrbitView.position);
+    if (savedOrbitView.target) controls.target.copy(savedOrbitView.target);
+    controls.update();
+  }
+}
+
+function updateFirstPersonMovement(delta) {
+  if (!isFirstPersonMode || !fpControls?.isLocked || !camera) return;
+  const speed = 2.8;
+  const moveDistance = speed * delta;
+  const forward = new THREE.Vector3();
+  camera.getWorldDirection(forward);
+  forward.y = 0;
+  if (forward.lengthSq() === 0) return;
+  forward.normalize();
+  const right = new THREE.Vector3().crossVectors(forward, new THREE.Vector3(0, 1, 0)).normalize();
+  const move = new THREE.Vector3();
+  if (firstPersonKeys.forward) move.add(forward);
+  if (firstPersonKeys.backward) move.sub(forward);
+  if (firstPersonKeys.right) move.add(right);
+  if (firstPersonKeys.left) move.sub(right);
+  if (move.lengthSq() === 0) {
+    camera.position.y = FIRST_PERSON_HEIGHT;
+    return;
+  }
+  move.normalize().multiplyScalar(moveDistance);
+  const nextPosition = camera.position.clone().add(move);
+  camera.position.copy(limitFirstPersonToPlanBounds(nextPosition));
+  camera.position.y = FIRST_PERSON_HEIGHT;
 }
 
 function clearMeshes(map) {
@@ -1379,9 +1570,30 @@ async function buildFurnitureGroup(item) {
   );
 
   const fp = furnitureFootprint(item);
-  group.rotation.y = THREE.MathUtils.degToRad((item.rotation || 0) + (config.rotationOffset || 0));
-  group.position.set(item.x + fp.width / 2, config.yOffset || 0, item.y + fp.depth / 2);
-  group.userData = { type: 'furniture', id: item.id };
+  if (isWallFurniture(item)) {
+    const room = state?.rooms?.find(r => r.id === item.room_id);
+    const wall = item.wall || 'top';
+    const mountHeight = Number(item.mount_height || config.defaultMountHeight || 1.5);
+    if (room) {
+      const placement = wallPlacementToWorld(room, wall, item.wall_offset || 0.3, mountHeight);
+      const inset = 0.055;
+      let px = placement.x;
+      let pz = placement.y;
+      if (wall === 'top') pz += inset;
+      if (wall === 'bottom') pz -= inset;
+      if (wall === 'left') px += inset;
+      if (wall === 'right') px -= inset;
+      group.position.set(px, mountHeight, pz);
+      group.rotation.y = THREE.MathUtils.degToRad((placement.rotation || 0) + (config.rotationOffset || 0));
+    } else {
+      group.position.set(item.x, mountHeight, item.y);
+      group.rotation.y = THREE.MathUtils.degToRad((item.rotation || 0) + (config.rotationOffset || 0));
+    }
+  } else {
+    group.rotation.y = THREE.MathUtils.degToRad((item.rotation || 0) + (config.rotationOffset || 0));
+    group.position.set(item.x + fp.width / 2, config.yOffset || 0, item.y + fp.depth / 2);
+  }
+  group.userData = { type: 'furniture', id: item.id, placement: item.placement || 'floor' };
 
   group.traverse(child => {
     child.userData = { type: 'furniture', id: item.id };
@@ -1632,11 +1844,12 @@ async function render3D() {
       [t, h, room.depth, room.x + room.width, h / 2, room.y + room.depth / 2],
     ];
 
-    walls.forEach(([ww, hh, dd, x, yy, z]) => {
+    walls.forEach(([ww, hh, dd, x, yy, z], index) => {
       const wall = new THREE.Mesh(new THREE.BoxGeometry(ww, hh, dd), wallMaterial);
       wall.position.set(x, yy, z);
       wall.castShadow = true;
       wall.receiveShadow = true;
+      wall.userData = { type: 'wall', roomId: room.id, wall: ['top', 'bottom', 'left', 'right'][index] };
       group.add(wall);
     });
 
@@ -1712,15 +1925,37 @@ function threeGroundPoint(event) {
   return hitPoint;
 }
 
+function threeWallHit(event) {
+  if (!raycaster || !state) return null;
+  setThreePointerFromEvent(event);
+  const intersects = raycaster.intersectObjects([...roomMeshes.values()], true);
+  for (const hit of intersects) {
+    const data = hit.object?.userData || {};
+    if (data.type !== 'wall' || !data.roomId || !data.wall) continue;
+    const room = state.rooms.find(r => r.id === data.roomId);
+    if (!room) continue;
+    const point = hit.point;
+    const wall = data.wall;
+    const rawOffset = (wall === 'top' || wall === 'bottom') ? point.x - room.x : point.z - room.y;
+    return { room, wall, offset: clampWallOffset(room, wall, rawOffset), point };
+  }
+  return null;
+}
+
 function startThreeFurnitureDrag(event, item) {
   const hitPoint = threeGroundPoint(event);
-  if (!hitPoint) return false;
   selected = { type: 'furniture', id: item.id };
   threeDrag.active = true;
   threeDrag.type = 'furniture';
   threeDrag.id = item.id;
-  threeDrag.offsetX = hitPoint.x - item.x;
-  threeDrag.offsetY = hitPoint.z - item.y;
+  if (isWallFurniture(item)) {
+    threeDrag.offsetX = 0;
+    threeDrag.offsetY = 0;
+  } else {
+    if (!hitPoint) return false;
+    threeDrag.offsetX = hitPoint.x - item.x;
+    threeDrag.offsetY = hitPoint.z - item.y;
+  }
   threeDrag.moved = false;
   controls.enabled = false;
   renderer.domElement.style.cursor = 'grabbing';
@@ -1779,6 +2014,10 @@ async function commitThreeFurnitureDrag() {
       color: item.color,
       material: item.material,
       type: item.type,
+      placement: item.placement || 'floor',
+      wall: item.wall,
+      wall_offset: item.wall_offset,
+      mount_height: item.mount_height,
     })
   });
 }
@@ -1806,10 +2045,12 @@ async function commitThreeOpeningDrag() {
 }
 
 function onThreePointerDown(event) {
+  if (isFirstPersonMode) return;
   threeClickState.down = true;
   threeClickState.x = event.clientX;
   threeClickState.y = event.clientY;
   if (event.button !== 0) return;
+  if (pendingPlacementType) return;
 
   // 先检测门窗
   const openingHit = intersectOpeningFromEvent(event);
@@ -1834,13 +2075,23 @@ function onThreePointerMove(event) {
   if (!renderer || !state) return;
   if (threeDrag.active) {
     if (threeDrag.type === 'furniture') {
-      const hitPoint = threeGroundPoint(event);
-      if (!hitPoint) return;
       const item = state.furnitures.find(f => f.id === threeDrag.id);
       if (!item) return;
-      item.x = +(hitPoint.x - threeDrag.offsetX).toFixed(1);
-      item.y = +(hitPoint.z - threeDrag.offsetY).toFixed(1);
-      applyFurnitureLocalPlacement(item);
+      if (isWallFurniture(item)) {
+        const wallHit = threeWallHit(event);
+        if (!wallHit) return;
+        item.room_id = wallHit.room.id;
+        item.wall = wallHit.wall;
+        item.wall_offset = +wallHit.offset.toFixed(2);
+        item.x = wallHit.point.x;
+        item.y = wallHit.point.z;
+      } else {
+        const hitPoint = threeGroundPoint(event);
+        if (!hitPoint) return;
+        item.x = +(hitPoint.x - threeDrag.offsetX).toFixed(1);
+        item.y = +(hitPoint.z - threeDrag.offsetY).toFixed(1);
+        applyFurnitureLocalPlacement(item);
+      }
       threeDrag.moved = true;
       syncUI();
       render2D();
@@ -1876,13 +2127,18 @@ function onThreePointerMove(event) {
   }
 
   if (pendingPlacementType) {
-    const hitPoint = threeGroundPoint(event);
-    if (!hitPoint) return;
     const meta = getFurnitureMeta(pendingPlacementType);
     if (!meta) return;
-    const temp = { x: hitPoint.x, y: hitPoint.z, width: meta.width, depth: meta.depth, rotation: 0 };
-    const room = findRoomForFurniturePlacement(temp.x, temp.y, temp);
-    previewState.hoverPlacement = room ? { room, x: temp.x, y: temp.y } : null;
+    if (meta.wallMount) {
+      const wallHit = threeWallHit(event);
+      previewState.hoverPlacement = wallHit ? { room: wallHit.room, x: wallHit.point.x, y: wallHit.point.z, wall: wallHit.wall, wall_offset: wallHit.offset, placement: 'wall' } : null;
+    } else {
+      const hitPoint = threeGroundPoint(event);
+      if (!hitPoint) return;
+      const temp = { x: hitPoint.x, y: hitPoint.z, width: meta.width, depth: meta.depth, rotation: 0 };
+      const room = findRoomForFurniturePlacement(temp.x, temp.y, temp);
+      previewState.hoverPlacement = room ? { room, x: temp.x, y: temp.y } : null;
+    }
     render2D();
   }
 }
@@ -1903,6 +2159,22 @@ async function onThreePointerUp(event) {
   threeClickState.down = false;
   const moved = Math.hypot(event.clientX - threeClickState.x, event.clientY - threeClickState.y);
   if (moved > 4) return;
+
+  if (pendingPlacementType) {
+    const meta = getFurnitureMeta(pendingPlacementType);
+    if (!meta) return;
+    if (meta.wallMount) {
+      const wallHit = threeWallHit(event);
+      if (wallHit) await placePendingFurnitureOnWall(wallHit.room.id, wallHit.wall, wallHit.offset);
+      return;
+    }
+    const hitPoint = threeGroundPoint(event);
+    if (!hitPoint) return;
+    const temp = { x: hitPoint.x, y: hitPoint.z, width: meta.width, depth: meta.depth, rotation: 0 };
+    const room = findRoomForFurniturePlacement(temp.x, temp.y, temp);
+    if (room) await placePendingFurnitureAt(temp.x, temp.y, room.id);
+    return;
+  }
 
   // 先检测门窗
   const openingHit = intersectOpeningFromEvent(event);
@@ -1926,16 +2198,44 @@ async function onThreePointerUp(event) {
     return;
   }
 
-  if (pendingPlacementType) {
-    const hitPoint = threeGroundPoint(event);
-    if (!hitPoint) return;
-    const meta = getFurnitureMeta(pendingPlacementType);
-    if (!meta) return;
-    const temp = { x: hitPoint.x, y: hitPoint.z, width: meta.width, depth: meta.depth, rotation: 0 };
-    const room = findRoomForFurniturePlacement(temp.x, temp.y, temp);
-    if (room) {
-      await placePendingFurnitureAt(temp.x, temp.y, room.id);
-    }
+}
+
+async function placePendingFurnitureOnWall(roomId, wall, wallOffset) {
+  const meta = getFurnitureMeta(pendingPlacementType);
+  const room = state?.rooms?.find(r => r.id === roomId);
+  if (!meta || !room || !meta.wallMount) return;
+  const offset = clampWallOffset(room, wall, wallOffset);
+  const mountHeight = Number(meta.defaultMountHeight || meta.yOffset || 1.5);
+  const placement = wallPlacementToWorld(room, wall, offset, mountHeight);
+  const data = await request('/api/furniture', {
+    method: 'POST',
+    body: JSON.stringify({
+      type: meta.value,
+      room_id: roomId,
+      placement: 'wall',
+      wall,
+      wall_offset: +offset.toFixed(2),
+      mount_height: +mountHeight.toFixed(2),
+      x: +placement.x.toFixed(2),
+      y: +placement.y.toFixed(2),
+      width: meta.width,
+      depth: meta.depth,
+      rotation: placement.rotation,
+      color: meta.color,
+      material: meta.material,
+      label: meta.label,
+    })
+  });
+  if (data.item) {
+    selected = { type: 'furniture', id: data.item.id };
+    preferredFurnitureType = meta.value;
+    pendingPlacementType = null;
+    previewState.hoverPlacement = null;
+    previewState.snapLines = [];
+    previewState.collision = false;
+    syncUI();
+    render2D();
+    render3D();
   }
 }
 
@@ -1979,11 +2279,17 @@ el.planCanvas.addEventListener('mousedown', evt => {
   
   if (pendingPlacementType) {
     const room = hitRoom(point.x, point.y);
-    if (room) {
+    const meta = getFurnitureMeta(pendingPlacementType);
+    if (room && meta) {
       const v = getViewport();
       const x = fromCanvasX(point.x, v);
       const y = fromCanvasY(point.y, v);
-      placePendingFurnitureAt(x, y, room.id);
+      if (meta.wallMount) {
+        const wallHit = nearestWallFromPoint(room, x, y);
+        placePendingFurnitureOnWall(room.id, wallHit.wall, wallHit.offset);
+      } else {
+        placePendingFurnitureAt(x, y, room.id);
+      }
       return;
     }
   }
@@ -2043,7 +2349,13 @@ el.planCanvas.addEventListener('mousemove', evt => {
     const meta = getFurnitureMeta(pendingPlacementType);
     const room = hitRoom(point.x, point.y);
     if (room && meta) {
-      previewState.hoverPlacement = { room, x: rx, y: ry };
+      if (meta.wallMount) {
+        const wallHit = nearestWallFromPoint(room, rx, ry);
+        const p = wallPlacementToWorld(room, wallHit.wall, wallHit.offset, meta.defaultMountHeight || meta.yOffset || 1.5);
+        previewState.hoverPlacement = { room, x: p.x, y: p.y, wall: wallHit.wall, wall_offset: wallHit.offset, placement: 'wall' };
+      } else {
+        previewState.hoverPlacement = { room, x: rx, y: ry };
+      }
     } else {
       previewState.hoverPlacement = null;
       previewState.snapLines = [];
@@ -2122,9 +2434,23 @@ el.planCanvas.addEventListener('mousemove', evt => {
   if (drag.kind === 'furniture') {
     const item = state.furnitures.find(f => f.id === drag.id);
     if (!item) return;
-    item.x = +(rx - drag.dx).toFixed(1);
-    item.y = +(ry - drag.dy).toFixed(1);
-    applyFurnitureLocalPlacement(item);
+    if (isWallFurniture(item)) {
+      const room = hitRoom(point.x, point.y) || state.rooms.find(r => r.id === item.room_id);
+      if (room) {
+        const wallHit = nearestWallFromPoint(room, rx, ry);
+        const p = wallPlacementToWorld(room, wallHit.wall, wallHit.offset, item.mount_height || 1.5);
+        item.room_id = room.id;
+        item.wall = wallHit.wall;
+        item.wall_offset = +wallHit.offset.toFixed(2);
+        item.x = +p.x.toFixed(2);
+        item.y = +p.y.toFixed(2);
+        item.rotation = p.rotation;
+      }
+    } else {
+      item.x = +(rx - drag.dx).toFixed(1);
+      item.y = +(ry - drag.dy).toFixed(1);
+      applyFurnitureLocalPlacement(item);
+    }
     syncUI();
     render2D();
     render3D();
@@ -2188,6 +2514,7 @@ window.addEventListener('mouseup', async () => {
       body: JSON.stringify({
         label: item.label, x: item.x, y: item.y, width: item.width, depth: item.depth,
         rotation: item.rotation, room_id: item.room_id, color: item.color, material: item.material, type: item.type,
+        placement: item.placement || 'floor', wall: item.wall, wall_offset: item.wall_offset, mount_height: item.mount_height,
       })
     });
   } else if (dragKind === 'opening' && op) {
@@ -2323,6 +2650,10 @@ async function applyFurnitureForm() {
       x: parseFloat(el.furnitureXInput.value || 0),
       y: parseFloat(el.furnitureYInput.value || 0),
       rotation: parseFloat(el.furnitureRotationInput.value || 0),
+      placement: item.placement || 'floor',
+      wall: item.wall,
+      wall_offset: item.wall_offset,
+      mount_height: item.mount_height,
     })
   });
 }
@@ -2508,6 +2839,8 @@ function bindEvents() {
   if (el.gestureToggleBtn) el.gestureToggleBtn.onclick = toggleGestureRecognition;
   if (el.showCommandPanelBtn) el.showCommandPanelBtn.onclick = () => showTopPanel('command');
   if (el.showAIFloorplanPanelBtn) el.showAIFloorplanPanelBtn.onclick = () => showTopPanel('ai');
+  if (el.firstPersonBtn) el.firstPersonBtn.onclick = enterFirstPersonMode;
+  if (el.editModeBtn) el.editModeBtn.onclick = exitFirstPersonMode;
   
   // 当用户点击输入框时，中断自动执行倒计时
   el.commandInput.onclick = () => {
@@ -2543,17 +2876,26 @@ function bindEvents() {
     if ((evt.ctrlKey || evt.metaKey) && evt.key === 'Enter') runCommand();
   });
 
+  window.addEventListener('keydown', event => {
+    if (!isFirstPersonMode) return;
+    if (['KeyW', 'ArrowUp'].includes(event.code)) firstPersonKeys.forward = true;
+    if (['KeyS', 'ArrowDown'].includes(event.code)) firstPersonKeys.backward = true;
+    if (['KeyA', 'ArrowLeft'].includes(event.code)) firstPersonKeys.left = true;
+    if (['KeyD', 'ArrowRight'].includes(event.code)) firstPersonKeys.right = true;
+  });
+
+  window.addEventListener('keyup', event => {
+    if (['KeyW', 'ArrowUp'].includes(event.code)) firstPersonKeys.forward = false;
+    if (['KeyS', 'ArrowDown'].includes(event.code)) firstPersonKeys.backward = false;
+    if (['KeyA', 'ArrowLeft'].includes(event.code)) firstPersonKeys.left = false;
+    if (['KeyD', 'ArrowRight'].includes(event.code)) firstPersonKeys.right = false;
+  });
+
   window.addEventListener('resize', () => {
     resizeCanvas();
     render2D();
-    if (renderer && camera) {
-      const w = el.threeContainer.clientWidth;
-      const h = el.threeContainer.clientHeight;
-      camera.aspect = w / h;
-      camera.updateProjectionMatrix();
-      renderer.setSize(w, h);
-      render3D();
-    }
+    resize3DRenderer();
+    render3D();
   });
 }
 

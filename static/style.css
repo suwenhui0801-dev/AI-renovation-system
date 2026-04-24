@@ -25,6 +25,7 @@ html, body { height: 100%; }
 
 body {
   margin: 0;
+  overflow-x: hidden;
   font-family: "Inter", "PingFang SC", "Microsoft YaHei", sans-serif;
   color: var(--text);
   background:
@@ -280,15 +281,21 @@ button.danger {
 
 .view-grid {
   min-height: 0;
+  height: 100%;
   display: grid;
-  grid-template-columns: 1.02fr .98fr;
+  grid-template-columns: minmax(0, 1.02fr) minmax(0, .98fr);
   gap: 18px;
+  align-items: stretch;
+  overflow: hidden;
 }
 
 .view-card {
   min-height: 0;
+  min-width: 0;
+  height: 100%;
   display: flex;
   flex-direction: column;
+  overflow: hidden;
 }
 
 .export-import-buttons {
@@ -306,8 +313,9 @@ button.danger {
   margin-top: 12px;
   position: relative;
   width: 100%;
-  height: calc(100vh - 190px);
-  min-height: 560px;
+  flex: 1;
+  min-height: 0;
+  height: auto;
   border-radius: 20px;
   border: 1px solid var(--line);
   background: linear-gradient(180deg, #fbfdff 0%, #f3f7fb 100%);
@@ -326,8 +334,9 @@ button.danger {
 #threeContainer {
   margin-top: 12px;
   width: 100%;
-  height: calc(100vh - 190px);
-  min-height: 560px;
+  flex: 1;
+  min-height: 0;
+  height: auto;
   border-radius: 20px;
   border: 1px solid var(--line);
   background: linear-gradient(180deg, #fbfdff 0%, #f3f7fb 100%);
@@ -337,8 +346,8 @@ button.danger {
 
 #threeContainer canvas {
   display: block;
-  width: 100%;
-  height: 100%;
+  width: 100% !important;
+  height: 100% !important;
 }
 
 
@@ -701,7 +710,9 @@ button.danger {
 @media (max-width: 1080px) {
   .app-shell { grid-template-columns: 1fr; height: auto; }
   .view-grid { grid-template-columns: 1fr; }
-  .plan-stage, #threeContainer { height: 70vh; min-height: 420px; }
+  .view-grid { height: auto; overflow: visible; }
+  .view-card { height: 70vh; min-height: 520px; }
+  .plan-stage, #threeContainer { height: auto; min-height: 0; }
   .grid.two-col { grid-template-columns: 1fr; }
   .action-row-three { grid-template-columns: 1fr; }
 }
@@ -1014,4 +1025,47 @@ button.danger {
   max-width: 100%;
   max-height: 150px;
   object-fit: contain;
+}
+
+
+/* ===== Wall placement + first-person view fixes ===== */
+.three-toolbar {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+}
+.three-toolbar .active {
+  background: linear-gradient(135deg, var(--primary), var(--primary-2));
+  color: #fff;
+  border-color: transparent;
+}
+.first-person-hint {
+  position: absolute;
+  left: 16px;
+  top: 16px;
+  z-index: 20;
+  display: none;
+  padding: 10px 14px;
+  border-radius: 999px;
+  color: #fff;
+  background: rgba(15, 23, 42, .74);
+  font-size: 13px;
+  font-weight: 800;
+  pointer-events: none;
+  backdrop-filter: blur(6px);
+}
+#threeContainer.first-person-active .first-person-hint {
+  display: block;
+}
+.wall-mount-pill {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 8px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: rgba(49,101,245,.10);
+  color: var(--primary-2);
+  font-size: 11px;
+  font-weight: 800;
 }
