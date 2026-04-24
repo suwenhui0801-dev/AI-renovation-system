@@ -40,6 +40,30 @@ ARK_MODEL = os.getenv("ARK_MODEL", "deepseek-v3-2-251201")
 ARK_MODEL_LABEL = ARK_MODEL
 ARK_API_URL = os.getenv("ARK_API_URL", "")
 
+# ======================
+# AI 模型职责绑定（全部使用 Render 环境变量里的 model ID）
+# ======================
+# 普通语音输入：ARK_MODEL -> /chat/completions
+# AI 生成户型图：DOUBAO_SEEDREAM_MODEL -> /images/generations
+# 应用户型图 / 解析户型图：DOUBAO_SEED_MODEL -> /chat/completions（视觉/多模态聊天模型）
+def get_model_id(env_name: str, purpose: str) -> str:
+    model_id = os.getenv(env_name, "").strip()
+    if not model_id:
+        raise RuntimeError(f"缺少环境变量 {env_name}，无法执行：{purpose}。请在 Render Environment 中填写对应模型的 model ID。")
+    return model_id
+
+
+def validate_model_binding(env_name: str, model_id: str, purpose: str) -> None:
+    lower_model = (model_id or "").lower()
+    if env_name == "DOUBAO_SEED_MODEL" and "seedream" in lower_model:
+        raise RuntimeError(
+            "DOUBAO_SEED_MODEL 当前填成了 Doubao-Seedream 文生图模型。"
+            "应用户型图/AI解析户型图会走 /chat/completions 视觉解析接口，"
+            "不能使用 doubao-seedream-5-0-260128 这类文生图 model ID。"
+            "请把 DOUBAO_SEED_MODEL 改成支持图片理解/视觉聊天的 Doubao Seed 模型 model ID；"
+            "DOUBAO_SEEDREAM_MODEL 才填写 doubao-seedream-5-0-260128。"
+        )
+
 
 def is_placeholder_api_key(value: str) -> bool:
     value = (value or "").strip()
@@ -1295,7 +1319,8 @@ def normalize_voice_command_with_llm(transcript: str) -> Dict:
             "confidence": "low"
         }
 
-    model = os.getenv("ARK_MODEL", "deepseek-v3-2-251201").strip()
+    model = get_model_id("ARK_MODEL", "普通语音输入指令标准化")
+    validate_model_binding("ARK_MODEL", model, "普通语音输入指令标准化")
 
     system_prompt = """
 你是装修编辑器的语音指令标准化助手。
@@ -1810,13 +1835,12 @@ def save_generated_floorplan_image(image_url=None, b64_json=None):
 # 调用火山引擎文生图API的函数
 def call_volcengine_image_api(params):
     api_key = os.getenv("VOLCENGINE_API_KEY_IMAGE", "").strip()
-    model = os.getenv("DOUBAO_SEEDREAM_MODEL", "").strip()
+    model = get_model_id("DOUBAO_SEEDREAM_MODEL", "AI生成户型图/文生图")
+    validate_model_binding("DOUBAO_SEEDREAM_MODEL", model, "AI生成户型图/文生图")
     base_url = os.getenv("VOLCENGINE_API_BASE", "https://ark.cn-beijing.volces.com/api/v3").rstrip("/")
 
     if not api_key:
         raise RuntimeError("缺少环境变量 VOLCENGINE_API_KEY_IMAGE")
-    if not model:
-        raise RuntimeError("缺少环境变量 DOUBAO_SEEDREAM_MODEL，请填写视觉/文生图模型的 model ID")
 
     url = f"{base_url}/images/generations"
 
@@ -2029,8 +2053,17 @@ def call_volcengine_api(model, messages, temperature=0.2, max_tokens=2048, timeo
         raise RuntimeError(f"火山方舟聊天/视觉模型网络请求失败：{str(e)}")
 
     if response.status_code >= 400:
+        error_text = response.text[:1200]
+        lower_error = error_text.lower()
+        if "does not support this api" in lower_error and "seedream" in lower_error:
+            raise RuntimeError(
+                "当前把 Doubao-Seedream 文生图模型传给了聊天/视觉解析接口。"
+                "请检查 Render 环境变量：AI生成户型图使用 DOUBAO_SEEDREAM_MODEL；"
+                "应用户型图/AI解析户型图必须使用 DOUBAO_SEED_MODEL，且该模型要支持 /chat/completions 图片理解。"
+                f" 原始错误：HTTP {response.status_code} {error_text}"
+            )
         raise RuntimeError(
-            f"火山方舟聊天/视觉模型调用失败：HTTP {response.status_code} {response.text[:1200]}"
+            f"火山方舟聊天/视觉模型调用失败：HTTP {response.status_code} {error_text}"
         )
 
     try:
@@ -2255,10 +2288,8 @@ def normalize_ai_floorplan_result(data):
 def parse_floorplan(image_base64):
     # 应用户型图 / AI解析户型图：严格调用 DOUBAO_SEED_MODEL 的 model ID。
     # 注意：这里不再使用 DOUBAO_SEEDREAM_MODEL，避免把文生图模型误用于解析。
-    model = os.getenv("DOUBAO_SEED_MODEL", "").strip()
-
-    if not model:
-        raise RuntimeError("缺少环境变量 DOUBAO_SEED_MODEL，无法解析户型图。应用户型图需要调用 DOUBAO_SEED_MODEL 的 model ID。")
+    model = get_model_id("DOUBAO_SEED_MODEL", "应用户型图/AI解析户型图")
+    validate_model_binding("DOUBAO_SEED_MODEL", model, "应用户型图/AI解析户型图")
 
     # 压缩图片可以显著降低多模态调用耗时，避免 Render 线上 500/worker timeout。
     compact_image_base64 = compact_base64_image(image_base64, max_side=1280, quality=82)

@@ -95,3 +95,16 @@ DOUBAO_SEEDREAM_MODEL=AI生成户型图/文生图模型 model ID
 1. Render 环境变量必须填写 model ID，不要填写模型名称。
 2. 如果应用户型图超时，可以把 `VOLCENGINE_TIMEOUT` 设置为 `120` 或更高，并使用上面的 gunicorn timeout 启动命令。
 3. 项目压缩包中不包含真实 API Key，部署时需要在 Render 的 Environment 中手动配置。
+
+
+### 本次模型调用逻辑修复说明
+
+本版本已经在 `app.py` 中强制区分三类模型调用：
+
+| 功能 | 环境变量 | API |
+|---|---|---|
+| 普通语音输入 | `ARK_MODEL` | `/chat/completions` |
+| AI 生成户型图 | `DOUBAO_SEEDREAM_MODEL` | `/images/generations` |
+| 应用户型图 / AI 解析户型图 | `DOUBAO_SEED_MODEL` | `/chat/completions`，需要支持图片理解 |
+
+注意：`doubao-seedream-5-0-260128` 这类 Seedream 文生图模型只能放在 `DOUBAO_SEEDREAM_MODEL`，不能放在 `DOUBAO_SEED_MODEL`。如果把 Seedream 填到 `DOUBAO_SEED_MODEL`，应用户型图会出现 `does not support this api`，因为解析户型图走的是聊天/视觉解析接口，不是文生图接口。
