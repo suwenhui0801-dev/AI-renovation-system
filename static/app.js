@@ -1,5 +1,6 @@
 import * as THREE from 'https://unpkg.com/three@0.160.0/build/three.module.js';
 import { OrbitControls } from 'https://unpkg.com/three@0.160.0/examples/jsm/controls/OrbitControls.js?module';
+import { GLTFLoader } from 'https://unpkg.com/three@0.160.0/examples/jsm/loaders/GLTFLoader.js?module';
 
 const el = {
   planCanvas: document.getElementById('planCanvas'),
@@ -89,7 +90,7 @@ const el = {
 const ctx = el.planCanvas.getContext('2d');
 let state = null;
 let selected = { type: 'room', id: null };
-let preferredFurnitureType = 'sofa';
+let preferredFurnitureType = 'loungeSofa';
 let pendingPlacementType = null;
 let librarySearch = '';
 let libraryCategory = '全部';
@@ -126,6 +127,12 @@ const roomMeshes = new Map();
 const furnitureGroups = new Map();
 const openingMeshes = new Map();
 
+let gltfLoader;
+const modelCache = new Map();
+let render3DToken = 0;
+
+
+
 let scene;
 let camera;
 let renderer;
@@ -135,7 +142,7 @@ let pointer;
 let fitCameraPending = true;
 
 const threeClickState = { down: false, x: 0, y: 0 };
-const threeDrag = { active: false, id: null, offsetX: 0, offsetY: 0, moved: false };
+const threeDrag = { active: false, id: null, type: null, offsetX: 0, offsetY: 0, moved: false };
 
 const SpeechRecognitionAPI = window.SpeechRecognition || window.webkitSpeechRecognition;
 let speechRecognition = null;
@@ -179,14 +186,17 @@ const VOICE_MODEL_LABEL = '';
 
 
 function selectedRoom() {
+  if (!selected) return null;
   return selected.type === 'room' ? state?.rooms.find(r => r.id === selected.id) : null;
 }
 
 function selectedOpening() {
+  if (!selected) return null;
   return selected.type === 'opening' ? state?.openings.find(o => o.id === selected.id) : null;
 }
 
 function selectedFurniture() {
+  if (!selected) return null;
   return selected.type === 'furniture' ? state?.furnitures.find(f => f.id === selected.id) : null;
 }
 
@@ -196,6 +206,19 @@ function getFurnitureCatalog() {
 
 function getFurnitureMeta(type) {
   return getFurnitureCatalog().find(item => item.value === type) || null;
+}
+
+function getFurnitureModelConfig(type) {
+  const meta = getFurnitureMeta(type);
+  if (!meta || !meta.model) {
+    throw new Error(`未找到家具类型 ${type} 对应的模型文件`);
+  }
+
+  return {
+    url: `/static/models/${meta.model}`,
+    rotationOffset: Number(meta.rotationOffset || 0),
+    yOffset: Number(meta.yOffset || 0),
+  };
 }
 
 function furnitureFootprint(item) {
@@ -305,6 +328,25 @@ function getViewport() {
   const offsetX = cw / 2 - ((bounds.minX + bounds.maxX) / 2) * scale + planPanX;
   const offsetY = ch / 2 - ((bounds.minY + bounds.maxY) / 2) * scale + planPanY;
   return { cw, ch, scale, offsetX, offsetY };
+}
+
+function clampPlanPan() {
+  const bounds = getBounds();
+  const cw = el.planCanvas.clientWidth;
+  const ch = el.planCanvas.clientHeight;
+
+  const baseScale = Math.min(
+    (cw - planPadding * 2) / bounds.width,
+    (ch - planPadding * 2) / bounds.height
+  );
+  const scale = Math.max(8, baseScale * planZoom);
+
+  // 允许少量拖动余量，但不能把整个户型拖没
+  const maxPanX = Math.max(80, bounds.width * scale * 0.35);
+  const maxPanY = Math.max(80, bounds.height * scale * 0.35);
+
+  planPanX = clamp(planPanX, -maxPanX, maxPanX);
+  planPanY = clamp(planPanY, -maxPanY, maxPanY);
 }
 
 const toCanvasX = (x, v) => v.offsetX + x * v.scale;
@@ -514,7 +556,16 @@ function renderFurnitureLibrary() {
   if (!state || !el.furnitureLibrary || !el.furnitureCategoryTabs) return;
 
   const catalog = getFurnitureCatalog();
-  const categories = ['全部', ...new Set(catalog.map(item => item.category || '家具'))];
+  const categories = [
+    '全部',
+    '浴室家具',
+    '卧室家具',
+    '客厅家具',
+    '厨房家具',
+    '书房/办公家具',
+    '电器设备',
+    '其他物品',
+  ];
 
   el.furnitureCategoryTabs.innerHTML = categories.map(category => `
     <button type="button" class="library-tab ${libraryCategory === category ? 'active' : ''}" data-category="${category}">
@@ -543,30 +594,22 @@ function renderFurnitureLibrary() {
   }
 
   el.furnitureLibrary.innerHTML = filtered.map(item => {
-    const groupText = item.group || '家具';
-    const scoreText = item.score || '基础';
-    const tagsHtml = (item.tags || []).slice(0, 3).map(tag => `<span class="furniture-tag">${tag}</span>`).join('');
-    const mediaHtml = item.image
-      ? `<div class="furniture-thumb"><img src="${item.image}" alt="${item.label}" class="furniture-thumb-img" /></div>`
-      : `<div class="furniture-icon">${item.icon || '🧩'}</div>`;
-
     return `
-      <article class="furniture-card ${pendingPlacementType === item.value ? 'active' : ''}" data-type="${item.value}">
-        <div class="furniture-card-top">
-          ${mediaHtml}
-          <span class="furniture-score">${scoreText}</span>
+      <div class="furniture-list-item ${pendingPlacementType === item.value ? 'active' : ''}" data-type="${item.value}">
+        <div class="furniture-list-main">
+          <div class="furniture-list-title">${item.label || '未命名家具'}</div>
+          <div class="furniture-list-sub">
+            ${(item.category || '家具')} · ${(item.group || '家具')}
+          </div>
         </div>
-        <div class="furniture-meta">
-          <strong>${item.label || '未命名家具'}</strong>
-          <small>${item.category || '家具'} · ${groupText}</small>
+        <div class="furniture-list-meta">
+          ${Number(item.width || 1).toFixed(1)}m × ${Number(item.depth || 1).toFixed(1)}m
         </div>
-        <div class="furniture-size">${Number(item.width || 1).toFixed(1)}m × ${Number(item.depth || 1).toFixed(1)}m</div>
-        <div class="furniture-tags">${tagsHtml}</div>
-      </article>
+      </div>
     `;
   }).join('');
 
-  el.furnitureLibrary.querySelectorAll('.furniture-card').forEach(card => {
+  el.furnitureLibrary.querySelectorAll('.furniture-list-item').forEach(card => {
     card.onclick = () => {
       const type = card.dataset.type;
       preferredFurnitureType = type;
@@ -602,14 +645,24 @@ async function request(url, options = {}) {
   const method = (options.method || 'GET').toUpperCase();
   const response = await fetch(url, { headers: { 'Content-Type': 'application/json' }, ...options });
   const data = await response.json();
-  const shouldAutoFit = method === 'POST' || url === '/api/undo' || url === '/api/redo' || url === '/api/command';
+  const shouldAutoFit =  url === '/api/room' ||  url === '/api/import';
 
   if (data.state) {
     state = data.state;
     if (shouldAutoFit) fitCameraPending = true;
+
+    // 每次状态更新后，把 2D 视图拉回中心
+    planPanX = 0;
+    planPanY = 0;
+    planZoom = 1;
   } else if (data.rooms) {
     state = data;
     if (shouldAutoFit) fitCameraPending = true;
+
+    // 每次状态更新后，把 2D 视图拉回中心
+    planPanX = 0;
+    planPanY = 0;
+    planZoom = 1;
   }
 
   if (data.message || state?.message) setMessage(data.message || state.message, response.ok && data.ok === false ? 'error' : null);
@@ -625,7 +678,16 @@ async function request(url, options = {}) {
 async function loadState() {
   const response = await fetch('/api/state');
   state = await response.json();
-  if (!selected.id && state.rooms[0]) selected = { type: 'room', id: state.rooms[0].id };
+
+  if (!selected || !selected.id) {
+    selected = state.rooms[0] ? { type: 'room', id: state.rooms[0].id } : null;
+  }
+
+  // 强制重置 2D 视图位置
+  planPanX = 0;
+  planPanY = 0;
+  planZoom = 1;
+
   initThree();
   syncUI();
   render2D();
@@ -663,11 +725,7 @@ function fillOpeningForm(opening) {
 function fillFurnitureForm(item) {
   if (!item) {
     el.popupFurnitureTitle.textContent = '家具库';
-    el.furnitureSelect.value = '';
-    el.furnitureLabelInput.value = '';
     const meta = getFurnitureMeta(preferredFurnitureType) || getFurnitureCatalog()[0];
-    el.furnitureColorInput.value = meta?.color || '#6f7d8c';
-    el.furnitureMaterialInput.value = meta?.material || '布艺';
     el.furnitureWidthInput.value = meta?.width || 1.2;
     el.furnitureDepthInput.value = meta?.depth || 0.8;
     el.furnitureXInput.value = 0;
@@ -676,10 +734,6 @@ function fillFurnitureForm(item) {
     return;
   }
   el.popupFurnitureTitle.textContent = '家具库';
-  el.furnitureSelect.value = item.id;
-  el.furnitureLabelInput.value = item.label || '';
-  el.furnitureColorInput.value = item.color;
-  el.furnitureMaterialInput.value = item.material;
   el.furnitureWidthInput.value = item.width;
   el.furnitureDepthInput.value = item.depth;
   el.furnitureXInput.value = item.x;
@@ -691,11 +745,14 @@ function syncUI() {
   if (!state) return;
   setMessage(state.message || '', lastFeedbackKind);
 
-  const selectionText = selected.type === 'room'
-    ? `房间：${selectedRoom()?.name || '无'}`
-    : selected.type === 'opening'
-      ? `门窗：${selectedOpening()?.name || '无'}`
-      : `家具：${selectedFurniture()?.label || '无'}`;
+  let selectionText = '未选中';
+  if (selected?.type === 'room') {
+    selectionText = `房间：${selectedRoom()?.name || '无'}`;
+  } else if (selected?.type === 'opening') {
+    selectionText = `门窗：${selectedOpening()?.name || '无'}`;
+  } else if (selected?.type === 'furniture') {
+    selectionText = `家具：${selectedFurniture()?.label || '无'}`;
+  }
 
   el.selectionInfo.textContent = selectionText;
 
@@ -715,9 +772,6 @@ function syncUI() {
 
   // el.furnitureRoomSelect.innerHTML = roomOptions;
   // el.furnitureTypeSelect.innerHTML = furnitureOptions;
-  el.furnitureSelect.innerHTML = ['<option value="">未选中</option>']
-    .concat(state.furnitures.map(f => `<option value="${f.id}">${f.label || '家具'}</option>`))
-    .join('');
 
   const room = selectedRoom() || state.rooms[0];
   const opening = selectedOpening();
@@ -788,7 +842,7 @@ function drawRoom(room, v) {
   const y = toCanvasY(room.y, v);
   const w = room.width * v.scale;
   const h = room.depth * v.scale;
-  const active = selected.type === 'room' && selected.id === room.id;
+  const active = selected?.type === 'room' && selected?.id === room.id;
 
   ctx.save();
   ctx.fillStyle = room.wall_color;
@@ -936,7 +990,7 @@ function drawOpenings(v) {
     const room = state.rooms.find(r => r.id === opening.room_id);
     if (!room) return;
     const seg = openingSegment(room, opening, v);
-    const active = selected.type === 'opening' && selected.id === opening.id;
+    const active = selected?.type === 'opening' && selected?.id === opening.id;
     if (opening.type === 'door') drawDoorSymbol(seg, opening, active);
     else drawWindowSymbol(seg, active);
   });
@@ -996,7 +1050,7 @@ function drawFurniture(item, v) {
   const y = toCanvasY(item.y, v);
   const w = fp.width * v.scale;
   const h = fp.depth * v.scale;
-  const active = selected.type === 'furniture' && selected.id === item.id;
+  const active = selected?.type === 'furniture' && selected?.id === item.id;
   const isCollision = previewState.collision && previewState.collisionId === item.id;
 
   ctx.save();
@@ -1006,12 +1060,33 @@ function drawFurniture(item, v) {
   ctx.fillRect(x, y, w, h);
   ctx.strokeRect(x, y, w, h);
 
-  if (item.type === 'bed') drawBedSymbol(x, y, w, h);
-  else if (item.type === 'sofa' || item.type === 'armchair') drawSofaSymbol(x, y, w, h);
-  else if (['dining_table', 'coffee_table', 'desk', 'kitchen_counter'].includes(item.type)) drawTableSymbol(x, y, w, h);
-  else if (['wardrobe', 'tv', 'nightstand', 'sideboard', 'bookshelf', 'sink'].includes(item.type)) drawWardrobeSymbol(x, y, w, h);
-  else if (['potted_plant', 'flower_pot', 'indoor_tree'].includes(item.type)) drawPlantSymbol(x, y, w, h);
-  else if (['bathtub', 'toilet'].includes(item.type)) drawBathSymbol(x, y, w, h);
+  if (['bedBunk', 'bedDouble', 'bedSingle', 'cabinetBed', 'cabinetBedDrawerTable'].includes(item.type)) {
+    drawBedSymbol(x, y, w, h);
+  } else if ([
+    'benchCushion', 'chairCushion', 'chairModernCushion', 'chairRounded',
+    'loungeChair', 'loungeChairRelax', 'loungeDesignChair',
+    'loungeDesignSofa', 'loungeDesignSofaCorner', 'loungeSofa', 'loungeSofaLong'
+  ].includes(item.type)) {
+    drawSofaSymbol(x, y, w, h);
+  } else if ([
+    'tableCoffee', 'tableCoffeeGlass', 'kitchenBar', 'desk', 'table', 'tableGlass', 'tableRound'
+  ].includes(item.type)) {
+    drawTableSymbol(x, y, w, h);
+  } else if ([
+    'bathroomCabinet', 'kitchenCabinet', 'kitchenCabinetDrawer',
+    'bookcaseClosedDoors', 'bookcaseClosedWide', 'bookcaseOpenLow',
+    'cabinetTelevision', 'cabinetTelevisionDoors', 'coatRack', 'coatRackStanding'
+  ].includes(item.type)) {
+    drawWardrobeSymbol(x, y, w, h);
+  } else if ([
+    'plantSmall1', 'plantSmall2', 'plantSmall3', 'pottedPlant'
+  ].includes(item.type)) {
+    drawPlantSymbol(x, y, w, h);
+  } else if ([
+    'bathtub', 'toilet', 'shower', 'showerRound', 'bathroomSink', 'kitchenSink'
+  ].includes(item.type)) {
+    drawBathSymbol(x, y, w, h);
+  }
 
   ctx.fillStyle = active ? '#7f1d1d' : '#0f172a';
   ctx.font = '12px "PingFang SC", sans-serif';
@@ -1159,6 +1234,8 @@ function initThree() {
   raycaster = new THREE.Raycaster();
   pointer = new THREE.Vector2();
 
+  gltfLoader = new GLTFLoader();
+
   scene.add(new THREE.AmbientLight(0xffffff, 1.25));
   const dir = new THREE.DirectionalLight(0xffffff, 1.15);
   dir.position.set(12, 18, 10);
@@ -1202,75 +1279,119 @@ function createPart(geometry, color, materialName, x, y, z) {
   return mesh;
 }
 
-function buildFurnitureGroup(item) {
-  const group = new THREE.Group();
-  const w = item.width;
-  const d = item.depth;
-  const h = Math.max(item.height || 0.75, 0.25);
-  const main = item.color;
-  const light = '#f8fafc';
-  const dark = '#334155';
+function normalizeModelRoot(source) {
+  const root = source.clone(true);
+  const box = new THREE.Box3().setFromObject(root);
+  const size = new THREE.Vector3();
+  const center = new THREE.Vector3();
+  box.getSize(size);
+  box.getCenter(center);
+  root.position.x -= center.x;
+  root.position.y -= box.min.y;
+  root.position.z -= center.z;
+  return { root, size };
+}
 
-  if (item.type === 'bed') {
-    group.add(createPart(new THREE.BoxGeometry(w, 0.16, d), '#8b5a2b', '木纹', 0, 0.08, 0));
-    group.add(createPart(new THREE.BoxGeometry(w * 0.94, 0.18, d * 0.9), main, item.material, 0, 0.26, d * 0.02));
-    group.add(createPart(new THREE.BoxGeometry(w * 0.24, 0.1, d * 0.18), light, '布艺', -w * 0.2, 0.38, -d * 0.34));
-    group.add(createPart(new THREE.BoxGeometry(w * 0.24, 0.1, d * 0.18), light, '布艺', w * 0.2, 0.38, -d * 0.34));
-  } else if (item.type === 'sofa' || item.type === 'armchair') {
-    group.add(createPart(new THREE.BoxGeometry(w, 0.28, d * 0.7), main, item.material, 0, 0.14, d * 0.06));
-    group.add(createPart(new THREE.BoxGeometry(w, 0.42, 0.14), main, item.material, 0, 0.34, -d / 2 + 0.07));
-    group.add(createPart(new THREE.BoxGeometry(0.12, 0.38, d), main, item.material, -w / 2 + 0.06, 0.19, 0));
-    group.add(createPart(new THREE.BoxGeometry(0.12, 0.38, d), main, item.material, w / 2 - 0.06, 0.19, 0));
-  } else if (['coffee_table', 'dining_table', 'desk', 'kitchen_counter', 'sideboard', 'tv'].includes(item.type)) {
-    const topThickness = item.type === 'coffee_table' ? 0.08 : 0.1;
-    const topY = item.type === 'coffee_table' ? 0.34 : h - topThickness / 2;
-    group.add(createPart(new THREE.BoxGeometry(w, topThickness, d), main, item.material, 0, topY, 0));
-    if (!['sideboard', 'tv', 'kitchen_counter'].includes(item.type)) {
-      const legH = Math.max(0.22, topY - 0.04);
-      [[-1, -1], [1, -1], [-1, 1], [1, 1]].forEach(([sx, sz]) => {
-        group.add(createPart(new THREE.BoxGeometry(0.08, legH, 0.08), dark, '金属', sx * (w / 2 - 0.1), legH / 2, sz * (d / 2 - 0.1)));
-      });
+function toRenderableMaterial(mat) {
+  const material = new THREE.MeshStandardMaterial({
+    color: (mat && mat.color && mat.color.isColor) ? mat.color.clone() : new THREE.Color('#cfcfcf'),
+    roughness: typeof mat?.roughness === 'number' ? mat.roughness : 0.78,
+    metalness: typeof mat?.metalness === 'number' ? mat.metalness : 0.08,
+    transparent: !!mat?.transparent,
+    opacity: typeof mat?.opacity === 'number' ? mat.opacity : 1,
+    side: THREE.DoubleSide,
+  });
+
+  if (mat?.map) material.map = mat.map;
+  if (mat?.normalMap) material.normalMap = mat.normalMap;
+  if (mat?.roughnessMap) material.roughnessMap = mat.roughnessMap;
+  if (mat?.metalnessMap) material.metalnessMap = mat.metalnessMap;
+  if (mat?.emissiveMap) material.emissiveMap = mat.emissiveMap;
+  if (mat?.aoMap) material.aoMap = mat.aoMap;
+
+  material.emissive = new THREE.Color(0x000000);
+  material.emissiveIntensity = 0;
+  material.needsUpdate = true;
+
+  return material;
+}
+
+function sanitizeModelMaterials(root) {
+  root.traverse(child => {
+    if (!child.isMesh) return;
+
+    if (Array.isArray(child.material)) {
+      child.material = child.material.map(mat => toRenderableMaterial(mat));
     } else {
-      group.add(createPart(new THREE.BoxGeometry(w, Math.max(0.45, h - 0.1), d), main, item.material, 0, Math.max(0.45, h - 0.1) / 2, 0));
-      if (item.type === 'tv') {
-        group.add(createPart(new THREE.BoxGeometry(w * 0.86, Math.max(0.3, h * 0.6), 0.05), '#111827', '金属', 0, h + 0.12, 0));
-      }
+      child.material = toRenderableMaterial(child.material);
     }
-  } else if (item.type === 'wardrobe' || item.type === 'bookshelf') {
-    group.add(createPart(new THREE.BoxGeometry(w, h, d), main, item.material, 0, h / 2, 0));
-    group.add(createPart(new THREE.BoxGeometry(0.02, h * 0.9, d * 0.9), '#f8fafc', '玻璃', 0, h * 0.5, d * 0.01));
-  } else if (item.type === 'nightstand') {
-    group.add(createPart(new THREE.BoxGeometry(w, h, d), main, item.material, 0, h / 2, 0));
-  } else if (item.type === 'dining_chair') {
-    group.add(createPart(new THREE.BoxGeometry(w * 0.92, 0.08, d * 0.9), main, item.material, 0, 0.45, 0));
-    group.add(createPart(new THREE.BoxGeometry(w * 0.9, 0.42, 0.08), main, item.material, 0, 0.65, -d * 0.38));
-    [[-1, -1], [1, -1], [-1, 1], [1, 1]].forEach(([sx, sz]) => {
-      group.add(createPart(new THREE.BoxGeometry(0.05, 0.45, 0.05), dark, '金属', sx * (w / 2 - 0.08), 0.22, sz * (d / 2 - 0.08)));
-    });
-  } else if (item.type === 'sink') {
-    group.add(createPart(new THREE.BoxGeometry(w, 0.76, d), main, item.material, 0, 0.38, 0));
-    group.add(createPart(new THREE.BoxGeometry(w * 0.72, 0.12, d * 0.62), light, '陶瓷', 0, 0.82, 0));
-  } else if (item.type === 'toilet') {
-    group.add(createPart(new THREE.BoxGeometry(w * 0.7, 0.44, d * 0.75), main, item.material, 0, 0.22, 0.02));
-    group.add(createPart(new THREE.BoxGeometry(w * 0.45, 0.7, d * 0.18), main, item.material, 0, 0.35, -d * 0.28));
-  } else if (item.type === 'bathtub') {
-    group.add(createPart(new THREE.BoxGeometry(w, h, d), main, item.material, 0, h / 2, 0));
-    group.add(createPart(new THREE.BoxGeometry(w * 0.88, h * 0.6, d * 0.76), '#dbeafe', '玻璃', 0, h * 0.58, 0));
-  } else if (['potted_plant', 'flower_pot', 'indoor_tree'].includes(item.type)) {
-    const potH = item.type === 'indoor_tree' ? 0.36 : 0.28;
-    group.add(createPart(new THREE.CylinderGeometry(w * 0.18, w * 0.24, potH, 18), '#9a6540', '陶瓷', 0, potH / 2, 0));
-    group.add(createPart(new THREE.CylinderGeometry(w * 0.04, w * 0.05, Math.max(0.45, h * 0.48), 10), '#7c4a24', '木纹', 0, potH + Math.max(0.45, h * 0.48) / 2 - 0.05, 0));
-    group.add(createPart(new THREE.SphereGeometry(w * 0.28, 18, 18), main, '原木风', 0, Math.max(0.8, h * 0.62), 0));
-  } else {
-    group.add(createPart(new THREE.BoxGeometry(w, h, d), main, item.material, 0, h / 2, 0));
-  }
+
+    child.geometry = child.geometry.clone();
+
+    child.castShadow = true;
+    child.receiveShadow = true;
+  });
+}
+
+function loadModel(url) {
+  if (modelCache.has(url)) return modelCache.get(url);
+  const promise = new Promise((resolve, reject) => {
+    gltfLoader.load(
+      url,
+      (gltf) => {
+        const normalized = normalizeModelRoot(gltf.scene);
+        modelCache.set(url, Promise.resolve(normalized));
+        resolve(normalized);
+      },
+      undefined,
+      (error) => reject(error)
+    );
+  });
+  modelCache.set(url, promise);
+  return promise;
+}
+
+async function buildFurnitureGroup(item) {
+  try {
+    const config = getFurnitureModelConfig(item.type);
+    if (!config || !config.url) {
+      console.warn(`未找到家具类型 ${item.type} 对应的模型配置`);
+      return new THREE.Group();
+    }
+    const { root: cachedRoot, size } = await loadModel(config.url);
+
+  const group = new THREE.Group();
+  const root = cachedRoot.clone(true);
+
+  // 关键修复：把 glb 子网格材质统一转成稳定可渲染材质
+  sanitizeModelMaterials(root);
+
+  group.add(root);
+
+  const safeX = Math.max(size.x || 0, 0.01);
+  const safeY = Math.max(size.y || 0, 0.01);
+  const safeZ = Math.max(size.z || 0, 0.01);
+
+  group.scale.set(
+    item.width / safeX,
+    Math.max(item.height || safeY, 0.1) / safeY,
+    item.depth / safeZ
+  );
 
   const fp = furnitureFootprint(item);
-  group.rotation.y = THREE.MathUtils.degToRad(item.rotation || 0);
-  group.position.set(item.x + fp.width / 2, 0, item.y + fp.depth / 2);
+  group.rotation.y = THREE.MathUtils.degToRad((item.rotation || 0) + (config.rotationOffset || 0));
+  group.position.set(item.x + fp.width / 2, config.yOffset || 0, item.y + fp.depth / 2);
   group.userData = { type: 'furniture', id: item.id };
-  group.traverse(child => { child.userData = { type: 'furniture', id: item.id }; });
+
+  group.traverse(child => {
+    child.userData = { type: 'furniture', id: item.id };
+  });
+
   return group;
+  } catch (error) {
+    console.warn('构建家具组失败:', item.type, item.label, error);
+    return new THREE.Group();
+  }
 }
 
 function createOpeningMesh(room, opening) {
@@ -1459,6 +1580,14 @@ function createOpeningMesh(room, opening) {
   }
 
   group.userData = { type: 'opening', id: opening.id };
+  
+  // 为所有子 mesh 设置相同的 userData
+  group.traverse(child => {
+    if (child.isMesh) {
+      child.userData = { type: 'opening', id: opening.id };
+    }
+  });
+  
   return group;
 }
 
@@ -1475,8 +1604,9 @@ function fitCameraToRooms(force = false) {
   fitCameraPending = false;
 }
 
-function render3D() {
+async function render3D() {
   if (!scene || !state) return;
+  const token = ++render3DToken;
   clearMeshes(roomMeshes);
   clearMeshes(furnitureGroups);
   clearMeshes(openingMeshes);
@@ -1522,19 +1652,29 @@ function render3D() {
     openingMeshes.set(opening.id, group);
   });
 
-  state.furnitures.forEach(item => {
-    const group = buildFurnitureGroup(item);
-    scene.add(group);
-    furnitureGroups.set(item.id, group);
-  });
+  for (const item of state.furnitures) {
+    try {
+      const group = await buildFurnitureGroup(item);
+      if (token !== render3DToken) return;
+      scene.add(group);
+      furnitureGroups.set(item.id, group);
+    } catch (error) {
+      console.warn('家具3D加载失败:', item.type, item.label, error);
+    }
+  }
 
   furnitureGroups.forEach((group, id) => {
     group.traverse(child => {
-      if (child.material && child.material.emissive) {
-        const isSelected = id === selected.id && selected.type === 'furniture';
-        const isCollision = previewState.collision && previewState.collisionId === id;
-        child.material.emissive.setHex(isCollision ? 0x8f1717 : isSelected ? 0x2b1a10 : 0x000000);
-        child.material.emissiveIntensity = isCollision ? 0.32 : isSelected ? 0.18 : 0;
+      if (child.material) {
+        const materials = Array.isArray(child.material) ? child.material : [child.material];
+        materials.forEach(material => {
+          if (material && material.emissive) {
+            const isSelected = id === selected?.id && selected?.type === 'furniture';
+            const isCollision = previewState.collision && previewState.collisionId === id;
+            material.emissive.setHex(isCollision ? 0x8f1717 : isSelected ? 0x2b1a10 : 0x000000);
+            material.emissiveIntensity = isCollision ? 0.32 : isSelected ? 0.18 : 0;
+          }
+        });
       }
     });
   });
@@ -1556,6 +1696,13 @@ function intersectFurnitureFromEvent(event) {
   return intersects[0] || null;
 }
 
+function intersectOpeningFromEvent(event) {
+  if (!renderer || !camera || !raycaster) return null;
+  setThreePointerFromEvent(event);
+  const intersects = raycaster.intersectObjects([...openingMeshes.values()], true);
+  return intersects[0] || null;
+}
+
 function threeGroundPoint(event) {
   if (!raycaster) return null;
   setThreePointerFromEvent(event);
@@ -1570,6 +1717,7 @@ function startThreeFurnitureDrag(event, item) {
   if (!hitPoint) return false;
   selected = { type: 'furniture', id: item.id };
   threeDrag.active = true;
+  threeDrag.type = 'furniture';
   threeDrag.id = item.id;
   threeDrag.offsetX = hitPoint.x - item.x;
   threeDrag.offsetY = hitPoint.z - item.y;
@@ -1582,9 +1730,24 @@ function startThreeFurnitureDrag(event, item) {
   return true;
 }
 
+function startThreeOpeningDrag(event, opening) {
+  selected = { type: 'opening', id: opening.id };
+  threeDrag.active = true;
+  threeDrag.type = 'opening';
+  threeDrag.id = opening.id;
+  threeDrag.moved = false;
+  controls.enabled = false;
+  renderer.domElement.style.cursor = 'grabbing';
+  syncUI();
+  render2D();
+  render3D();
+  return true;
+}
+
 function stopThreeFurnitureDrag() {
   threeDrag.active = false;
   threeDrag.id = null;
+  threeDrag.type = null;
   threeDrag.offsetX = 0;
   threeDrag.offsetY = 0;
   threeDrag.moved = false;
@@ -1620,15 +1783,48 @@ async function commitThreeFurnitureDrag() {
   });
 }
 
+async function commitThreeOpeningDrag() {
+  const opening = state?.openings.find(o => o.id === threeDrag.id);
+  if (!opening) {
+    stopThreeFurnitureDrag();
+    return;
+  }
+  const dragId = threeDrag.id;
+  stopThreeFurnitureDrag();
+  await request(`/api/opening/${dragId}`, {
+    method: 'PATCH',
+    body: JSON.stringify({
+      name: opening.name,
+      offset: opening.offset,
+      width: opening.width,
+      height: opening.height,
+      sill: opening.sill,
+      color: opening.color,
+      material: opening.material,
+    })
+  });
+}
+
 function onThreePointerDown(event) {
   threeClickState.down = true;
   threeClickState.x = event.clientX;
   threeClickState.y = event.clientY;
   if (event.button !== 0) return;
 
-  const hit = intersectFurnitureFromEvent(event);
-  const id = hit?.object?.userData?.id;
-  const item = id ? state?.furnitures.find(f => f.id === id) : null;
+  // 先检测门窗
+  const openingHit = intersectOpeningFromEvent(event);
+  const openingId = openingHit?.object?.userData?.id;
+  const opening = openingId ? state?.openings.find(o => o.id === openingId) : null;
+  if (opening) {
+    event.preventDefault();
+    startThreeOpeningDrag(event, opening);
+    return;
+  }
+
+  // 再检测家具
+  const furnitureHit = intersectFurnitureFromEvent(event);
+  const furnitureId = furnitureHit?.object?.userData?.id;
+  const item = furnitureId ? state?.furnitures.find(f => f.id === furnitureId) : null;
   if (!item) return;
   event.preventDefault();
   startThreeFurnitureDrag(event, item);
@@ -1637,18 +1833,46 @@ function onThreePointerDown(event) {
 function onThreePointerMove(event) {
   if (!renderer || !state) return;
   if (threeDrag.active) {
-    const hitPoint = threeGroundPoint(event);
-    if (!hitPoint) return;
-    const item = state.furnitures.find(f => f.id === threeDrag.id);
-    if (!item) return;
-    item.x = +(hitPoint.x - threeDrag.offsetX).toFixed(1);
-    item.y = +(hitPoint.z - threeDrag.offsetY).toFixed(1);
-    applyFurnitureLocalPlacement(item);
-    threeDrag.moved = true;
-    syncUI();
-    render2D();
-    render3D();
-    return;
+    if (threeDrag.type === 'furniture') {
+      const hitPoint = threeGroundPoint(event);
+      if (!hitPoint) return;
+      const item = state.furnitures.find(f => f.id === threeDrag.id);
+      if (!item) return;
+      item.x = +(hitPoint.x - threeDrag.offsetX).toFixed(1);
+      item.y = +(hitPoint.z - threeDrag.offsetY).toFixed(1);
+      applyFurnitureLocalPlacement(item);
+      threeDrag.moved = true;
+      syncUI();
+      render2D();
+      render3D();
+      return;
+    } else if (threeDrag.type === 'opening') {
+      const hitPoint = threeGroundPoint(event);
+      if (!hitPoint) return;
+      const opening = state.openings.find(o => o.id === threeDrag.id);
+      if (!opening) return;
+      const room = state.rooms.find(r => r.id === opening.room_id);
+      if (!room) return;
+      
+      // 沿墙体移动门窗
+      if (opening.wall === 'top' || opening.wall === 'bottom') {
+        // 上墙或下墙，修改横向 offset
+        let newOffset = hitPoint.x - room.x - opening.width / 2;
+        newOffset = Math.max(0, Math.min(newOffset, room.width - opening.width));
+        opening.offset = +newOffset.toFixed(1);
+      } else if (opening.wall === 'left' || opening.wall === 'right') {
+        // 左墙或右墙，修改纵向 offset
+        let newOffset = hitPoint.z - room.y - opening.width / 2;
+        newOffset = Math.max(0, Math.min(newOffset, room.depth - opening.width));
+        opening.offset = +newOffset.toFixed(1);
+      }
+      
+      threeDrag.moved = true;
+      syncUI();
+      render2D();
+      render3D();
+      return;
+    }
   }
 
   if (pendingPlacementType) {
@@ -1667,7 +1891,11 @@ async function onThreePointerUp(event) {
   if (!renderer || !state) return;
   if (threeDrag.active) {
     threeClickState.down = false;
-    await commitThreeFurnitureDrag();
+    if (threeDrag.type === 'furniture') {
+      await commitThreeFurnitureDrag();
+    } else if (threeDrag.type === 'opening') {
+      await commitThreeOpeningDrag();
+    }
     return;
   }
 
@@ -1676,10 +1904,22 @@ async function onThreePointerUp(event) {
   const moved = Math.hypot(event.clientX - threeClickState.x, event.clientY - threeClickState.y);
   if (moved > 4) return;
 
-  const hit = intersectFurnitureFromEvent(event);
-  const id = hit?.object?.userData?.id;
-  if (id) {
-    selected = { type: 'furniture', id };
+  // 先检测门窗
+  const openingHit = intersectOpeningFromEvent(event);
+  const openingId = openingHit?.object?.userData?.id;
+  if (openingId) {
+    selected = { type: 'opening', id: openingId };
+    syncUI();
+    render2D();
+    render3D();
+    return;
+  }
+
+  // 再检测家具
+  const furnitureHit = intersectFurnitureFromEvent(event);
+  const furnitureId = furnitureHit?.object?.userData?.id;
+  if (furnitureId) {
+    selected = { type: 'furniture', id: furnitureId };
     syncUI();
     render2D();
     render3D();
@@ -1779,17 +2019,18 @@ el.planCanvas.addEventListener('mousedown', evt => {
     return;
   }
 
-  // 点击空白区域时，重置选中状态并开始平移
-  selected = null;
-  drag.mode = 'pan';
+  // 点击空白区域时，进入画布拖动模式
+  drag.mode = 'move';
+  drag.id = null;
   drag.kind = 'canvas';
   drag.startX = point.x;
   drag.startY = point.y;
   drag.startPanX = planPanX;
   drag.startPanY = planPanY;
-  syncUI();
+
+  // 空白区域不强制改选中项，避免一拖动画布就跳选中
   render2D();
-  render3D();
+  return;
 });
 
 el.planCanvas.addEventListener('mousemove', evt => {
@@ -1814,7 +2055,7 @@ el.planCanvas.addEventListener('mousemove', evt => {
   // 只有在鼠标按下且有选中对象时才开始拖动
   // 注意：这里不需要检查鼠标是否移动，因为mousemove事件本身就表示鼠标在移动
   if (mouseDown && !drag.mode && selected) {
-    if (selected.type === 'furniture') {
+    if (selected?.type === 'furniture') {
       const furniture = state.furnitures.find(f => f.id === selected.id);
       if (furniture) {
         drag.mode = 'move';
@@ -1823,7 +2064,7 @@ el.planCanvas.addEventListener('mousemove', evt => {
         drag.dx = rx - furniture.x;
         drag.dy = ry - furniture.y;
       }
-    } else if (selected.type === 'room') {
+    } else if (selected?.type === 'room') {
       const room = state.rooms.find(r => r.id === selected.id);
       if (room) {
         const edge = roomEdgeHit(room, point.x, point.y);
@@ -1834,7 +2075,7 @@ el.planCanvas.addEventListener('mousemove', evt => {
         drag.dx = rx - room.x;
         drag.dy = ry - room.y;
       }
-    } else if (selected.type === 'opening') {
+    } else if (selected?.type === 'opening') {
       const opening = state.openings.find(o => o.id === selected.id);
       if (opening) {
         drag.mode = 'move';
@@ -1849,6 +2090,7 @@ el.planCanvas.addEventListener('mousemove', evt => {
   if (drag.kind === 'canvas') {
     planPanX = drag.startPanX + (point.x - drag.startX);
     planPanY = drag.startPanY + (point.y - drag.startY);
+    clampPlanPan();
     render2D();
     return;
   }
@@ -1971,6 +2213,13 @@ el.planCanvas.addEventListener('dblclick', async evt => {
 });
 
 el.planCanvas.addEventListener('mouseleave', () => {
+  if (drag.kind === 'canvas') {
+    drag.mode = null;
+    drag.id = null;
+    drag.kind = null;
+    drag.edge = null;
+  }
+
   if (!pendingPlacementType) return;
   previewState.hoverPlacement = null;
   previewState.snapLines = [];
@@ -1982,6 +2231,7 @@ el.planCanvas.addEventListener('wheel', evt => {
   evt.preventDefault();
   const delta = evt.deltaY > 0 ? 0.9 : 1.1;
   planZoom = clamp(+(planZoom * delta).toFixed(3), 0.45, 3.6);
+  clampPlanPan();
   render2D();
 }, { passive: false });
 
@@ -2035,7 +2285,7 @@ async function applyOpeningForm(isNew = false) {
 
 async function addFurnitureFromForm() {
   const roomId = selectedRoom()?.id || state.rooms[0]?.id;
-  const type = preferredFurnitureType || 'sofa';
+  const type = preferredFurnitureType || 'loungeSofa';
   const data = await request('/api/furniture', {
     method: 'POST',
     body: JSON.stringify({
@@ -2078,21 +2328,25 @@ async function applyFurnitureForm() {
 }
 
 async function deleteSelectedObject() {
-  if (selected.type === 'room') {
+  if (!selected) return;
+
+  if (selected?.type === 'room') {
     const room = selectedRoom();
     if (!room) return;
     await request(`/api/room/${room.id}`, { method: 'DELETE' });
     selected = { type: 'room', id: state.rooms[0]?.id || null };
     return;
   }
-  if (selected.type === 'opening') {
+
+  if (selected?.type === 'opening') {
     const opening = selectedOpening();
     if (!opening) return;
     await request(`/api/opening/${opening.id}`, { method: 'DELETE' });
     selected = { type: 'room', id: state.rooms[0]?.id || null };
     return;
   }
-  if (selected.type === 'furniture') {
+
+  if (selected?.type === 'furniture') {
     const item = selectedFurniture();
     if (!item) return;
     await request(`/api/furniture/${item.id}`, { method: 'DELETE' });
@@ -2279,14 +2533,6 @@ function bindEvents() {
   el.addFurnitureBtn.onclick = addFurnitureFromForm;
   el.applyFurnitureBtn.onclick = applyFurnitureForm;
   el.deleteFurnitureBtn.onclick = deleteSelectedObject;
-
-  el.furnitureSelect.onchange = () => {
-    if (!el.furnitureSelect.value) return;
-    selected = { type: 'furniture', id: el.furnitureSelect.value };
-    syncUI();
-    render2D();
-    render3D();
-  };
 
   el.furnitureSearchInput.addEventListener('input', event => {
     librarySearch = event.target.value || '';
@@ -2622,14 +2868,14 @@ async function gestureHandleOneGesture(hand) {
   // 优先选中家具，然后是房间
   if (furniture) {
     // 只有当选中的对象不同时才更新
-    if (selected.type !== 'furniture' || selected.id !== furniture.id) {
+    if (selected?.type !== 'furniture' || selected?.id !== furniture.id) {
       selected = { type: 'furniture', id: furniture.id };
       render2D();
       render3D();
     }
   } else if (room) {
     // 只有当选中的对象不同时才更新
-    if (selected.type !== 'room' || selected.id !== room.id) {
+    if (selected?.type !== 'room' || selected?.id !== room.id) {
       selected = { type: 'room', id: room.id };
       render2D();
       render3D();
@@ -3322,11 +3568,53 @@ function initAIFloorplanModule() {
         // 写入tmp.json文件（模拟）
         try {
           // 这里需要将解析结果转换为与导出格式一致的JSON
-          // 假设parseResult包含了户型信息
+          // 标准化导入的数据，确保所有字段都有合理的默认值
+          const normalizedRooms = (parseResult.rooms || []).map((room, index) => ({
+            id: room.id || `room_${index + 1}`,
+            name: room.name || `房间${index + 1}`,
+            x: Number(room.x || 0),
+            y: Number(room.y || 0),
+            width: Number(room.width || 3),
+            depth: Number(room.depth || 3),
+            height: Number(room.height || 3),
+            wall_color: room.wall_color || '#f0efe9',
+            wall_material: room.wall_material || '白色瓷砖',
+          }));
+
+          const normalizedFurnitures = (parseResult.furnitures || []).map((item, index) => ({
+            id: item.id || `furniture_${index + 1}`,
+            type: item.type || 'loungeSofa',
+            label: item.label || '家具',
+            room_id: item.room_id || normalizedRooms[0]?.id || null,
+            x: Number(item.x || 0),
+            y: Number(item.y || 0),
+            z: Number(item.z || 0),
+            width: Number(item.width || 1),
+            depth: Number(item.depth || 1),
+            height: Number(item.height || 0.8),
+            rotation: Number(item.rotation || 0),
+            color: item.color || '#6f7d8c',
+            material: item.material || '布艺',
+          }));
+
+          const normalizedOpenings = (parseResult.openings || []).map((item, index) => ({
+            id: item.id || `opening_${index + 1}`,
+            type: item.type || 'door',
+            name: item.name || '门窗',
+            room_id: item.room_id || normalizedRooms[0]?.id || null,
+            wall: item.wall || 'top',
+            offset: Number(item.offset || 0),
+            width: Number(item.width || 1),
+            height: Number(item.height || 2.1),
+            sill: Number(item.sill || 0),
+            color: item.color || '#8b6a4d',
+            material: item.material || '木纹',
+          }));
+
           const floorplanData = {
-            rooms: parseResult.rooms || [],
-            furnitures: parseResult.furnitures || [],
-            openings: parseResult.openings || [],
+            rooms: normalizedRooms,
+            furnitures: normalizedFurnitures,
+            openings: normalizedOpenings,
             options: {
               room_types: ["卧室", "浴室", "客厅", "饭厅", "厨房", "阳台"],
               room_materials: ["木纹", "布艺", "皮质", "绒面", "金属", "石材", "白色瓷砖", "大理石", "原木风", "玻璃", "烤漆", "混凝土", "陶瓷"],

@@ -14,15 +14,14 @@ from flask import Flask, jsonify, render_template, request
 app = Flask(__name__)
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-
 # 火山方舟（Ark）配置：
 # 1) 推荐把真实 API Key 配到系统环境变量 ARK_API_KEY 中
 # 2) 如需切换模型，可修改 ARK_MODEL（也可填 Endpoint ID）
 # 3) 保留旧的 DEEPSEEK_* 环境变量兼容，方便从上一个版本平滑迁移
-ARK_API_KEY = os.getenv("ARK_API_KEY") or os.getenv("DEEPSEEK_API_KEY") or ""
-ARK_MODEL = os.getenv("ARK_MODEL") or os.getenv("ARK_ENDPOINT_ID") or os.getenv("DEEPSEEK_MODEL") or "deepseek-v3-2-251201"
-ARK_MODEL_LABEL = ""
-ARK_API_URL = os.getenv("ARK_API_URL") or os.getenv("DEEPSEEK_API_URL") or "https://ark.cn-beijing.volces.com/api/v3/chat/completions"
+ARK_API_KEY = os.getenv("ARK_API_KEY", "")
+ARK_MODEL = os.getenv("ARK_MODEL", "deepseek-v3-2-251201")
+ARK_MODEL_LABEL = "本地规则模式"
+ARK_API_URL = os.getenv("ARK_API_URL", "")
 
 
 def is_placeholder_api_key(value: str) -> bool:
@@ -53,110 +52,591 @@ OPENING_TYPE_LABELS = {"door": "门", "window": "窗"}
 ROOM_TYPE_OPTIONS = ["卧室", "浴室", "客厅", "饭厅", "厨房", "阳台"]
 
 FURNITURE_DEFAULTS: Dict[str, Dict] = {
-    "sofa": {
-        "label": "沙发", "width": 1.8, "depth": 0.85, "height": 0.82,
-        "color": "#6f7d8c", "material": "布艺", "category": "客厅", "group": "休闲家具",
-        "icon": "🛋️", "tags": ["客厅", "主件", "舒适"], "score": "高人气"
+    # 浴室家具
+    "bathroomCabinet": {
+        "label": "浴室柜", "model": "bathroomCabinet.glb",
+        "width": 1.2, "depth": 0.5, "height": 0.9,
+        "color": "#d9d9d9", "material": "木纹",
+        "category": "浴室家具", "group": "卫浴收纳",
+        "icon": "🛁", "tags": ["浴室", "收纳"], "score": "常用",
+        "rotationOffset": 0, "yOffset": 0
     },
-    "armchair": {
-        "label": "单人椅", "width": 0.85, "depth": 0.78, "height": 0.82,
-        "color": "#8d7b68", "material": "布艺", "category": "客厅", "group": "坐具家具",
-        "icon": "🪑", "tags": ["客厅", "阅读", "单座"], "score": "高搭配"
+    "bathroomSink": {
+        "label": "浴室洗手盆", "model": "bathroomSink.glb",
+        "width": 0.9, "depth": 0.55, "height": 0.9,
+        "color": "#eef2f6", "material": "陶瓷",
+        "category": "浴室家具", "group": "卫浴洁具",
+        "icon": "🚰", "tags": ["洗手"], "score": "常用",
+        "rotationOffset": 0, "yOffset": 0
     },
-    "tv": {
-        "label": "电视柜", "width": 1.4, "depth": 0.36, "height": 0.68,
-        "color": "#2b3038", "material": "木纹", "category": "客厅", "group": "电器摆件",
-        "icon": "📺", "tags": ["客厅", "电视", "低柜"], "score": "常用"
+
+    "bathtub": {
+        "label": "浴缸", "model": "bathtub.glb",
+        "width": 1.6, "depth": 0.8, "height": 0.6,
+        "color": "#ffffff", "material": "陶瓷",
+        "category": "浴室家具", "group": "卫浴洁具",
+        "icon": "🛁", "tags": ["浴室"], "score": "展示",
+        "rotationOffset": 0, "yOffset": 0
     },
-    "coffee_table": {
-        "label": "茶几", "width": 1.05, "depth": 0.6, "height": 0.45,
-        "color": "#b58b62", "material": "木纹", "category": "客厅", "group": "桌几家具",
-        "icon": "☕", "tags": ["客厅", "中心位", "小桌"], "score": "热销"
+    "shower": {
+        "label": "淋浴间", "model": "shower.glb",
+        "width": 1.0, "depth": 1.0, "height": 2.0,
+        "color": "#dff3ff", "material": "玻璃",
+        "category": "浴室家具", "group": "卫浴洁具",
+        "icon": "🚿", "tags": ["淋浴"], "score": "常用",
+        "rotationOffset": 0, "yOffset": 0
     },
-    "sideboard": {
-        "label": "边柜", "width": 1.2, "depth": 0.45, "height": 0.82,
-        "color": "#c49a6c", "material": "木纹", "category": "客厅", "group": "收纳家具",
-        "icon": "🗄️", "tags": ["客厅", "收纳", "靠墙"], "score": "推荐"
-    },
-    "bed": {
-        "label": "床", "width": 2.0, "depth": 1.8, "height": 0.62,
-        "color": "#d9d0c7", "material": "布艺", "category": "卧室", "group": "睡眠家具",
-        "icon": "🛏️", "tags": ["卧室", "主件", "双人"], "score": "高人气"
-    },
-    "wardrobe": {
-        "label": "衣柜", "width": 1.6, "depth": 0.62, "height": 2.1,
-        "color": "#c49a6c", "material": "木纹", "category": "卧室", "group": "收纳家具",
-        "icon": "🚪", "tags": ["卧室", "高柜", "收纳"], "score": "常用"
-    },
-    "nightstand": {
-        "label": "床头柜", "width": 0.48, "depth": 0.42, "height": 0.56,
-        "color": "#c19b73", "material": "木纹", "category": "卧室", "group": "收纳家具",
-        "icon": "🧺", "tags": ["卧室", "边几", "小件"], "score": "搭配"
-    },
-    "bookshelf": {
-        "label": "书架", "width": 1.0, "depth": 0.32, "height": 1.9,
-        "color": "#9f7f56", "material": "木纹", "category": "卧室", "group": "收纳家具",
-        "icon": "📚", "tags": ["卧室", "书房", "靠墙"], "score": "推荐"
-    },
-    "desk": {
-        "label": "书桌", "width": 1.2, "depth": 0.6, "height": 0.75,
-        "color": "#b8956a", "material": "木纹", "category": "卧室", "group": "桌几家具",
-        "icon": "🧑‍💻", "tags": ["学习", "办公", "桌面"], "score": "常用"
-    },
-    "dining_table": {
-        "label": "餐桌", "width": 1.4, "depth": 0.82, "height": 0.75,
-        "color": "#d5b48c", "material": "木纹", "category": "餐厅", "group": "桌几家具",
-        "icon": "🍽️", "tags": ["餐厅", "主件", "四人"], "score": "高人气"
-    },
-    "dining_chair": {
-        "label": "餐椅", "width": 0.5, "depth": 0.5, "height": 0.9,
-        "color": "#777777", "material": "布艺", "category": "餐厅", "group": "坐具家具",
-        "icon": "🪑", "tags": ["餐厅", "坐具", "搭配"], "score": "常用"
-    },
-    "kitchen_counter": {
-        "label": "橱柜台面", "width": 1.6, "depth": 0.6, "height": 0.92,
-        "color": "#d7d7d7", "material": "大理石", "category": "厨房", "group": "厨卫家具",
-        "icon": "🍳", "tags": ["厨房", "靠墙", "台面"], "score": "推荐"
-    },
-    "sink": {
-        "label": "洗手台", "width": 0.9, "depth": 0.55, "height": 0.86,
-        "color": "#eef2f6", "material": "陶瓷", "category": "卫浴", "group": "厨卫家具",
-        "icon": "🚰", "tags": ["卫浴", "洗漱", "靠墙"], "score": "高频"
+    "showerRound": {
+        "label": "圆形淋浴间", "model": "showerRound.glb",
+        "width": 1.0, "depth": 1.0, "height": 2.0,
+        "color": "#dff3ff", "material": "玻璃",
+        "category": "浴室家具", "group": "卫浴洁具",
+        "icon": "🚿", "tags": ["淋浴"], "score": "展示",
+        "rotationOffset": 0, "yOffset": 0
     },
     "toilet": {
-        "label": "马桶", "width": 0.72, "depth": 0.72, "height": 0.82,
-        "color": "#f7f7f7", "material": "陶瓷", "category": "卫浴", "group": "厨卫家具",
-        "icon": "🚽", "tags": ["卫浴", "固定", "洁具"], "score": "高频"
+        "label": "马桶", "model": "toilet.glb",
+        "width": 0.72, "depth": 0.72, "height": 0.82,
+        "color": "#f7f7f7", "material": "陶瓷",
+        "category": "浴室家具", "group": "卫浴洁具",
+        "icon": "🚽", "tags": ["卫浴"], "score": "高频",
+        "rotationOffset": 180, "yOffset": 0
     },
-    "bathtub": {
-        "label": "浴缸", "width": 1.6, "depth": 0.78, "height": 0.58,
-        "color": "#ffffff", "material": "陶瓷", "category": "卫浴", "group": "厨卫家具",
-        "icon": "🛁", "tags": ["卫浴", "大件", "靠墙"], "score": "展示"
+    
+    # 卧室家具
+    "bedBunk": {
+        "label": "双层床", "model": "bedBunk.glb",
+        "width": 1.15, "depth": 2.1, "height": 1.85,
+        "color": "#d9d0c7", "material": "木纹",
+        "category": "卧室家具", "group": "睡眠家具",
+        "icon": "🛏️", "tags": ["卧室"], "score": "展示",
+        "rotationOffset": 90, "yOffset": 0
     },
-    "potted_plant": {
-        "label": "绿植", "width": 0.7, "depth": 0.7, "height": 1.0,
-        "color": "#4caf50", "material": "原木风", "category": "装饰", "group": "绿植装饰",
-        "icon": "🪴", "tags": ["装饰", "绿植", "点缀"], "score": "推荐"
+    "bedDouble": {
+        "label": "双人床", "model": "bedDouble.glb",
+        "width": 2.0, "depth": 1.8, "height": 0.62,
+        "color": "#d9d0c7", "material": "布艺",
+        "category": "卧室家具", "group": "睡眠家具",
+        "icon": "🛏️", "tags": ["卧室"], "score": "高人气",
+        "rotationOffset": 90, "yOffset": 0
     },
-    "flower_pot": {
-        "label": "花盆", "width": 0.5, "depth": 0.5, "height": 0.62,
-        "color": "#f06292", "material": "陶瓷", "category": "装饰", "group": "绿植装饰",
-        "icon": "🌸", "tags": ["装饰", "花艺", "小件"], "score": "精致"
+    "bedSingle": {
+        "label": "单人床", "model": "bedSingle.glb",
+        "width": 1.2, "depth": 2.0, "height": 0.62,
+        "color": "#d9d0c7", "material": "布艺",
+        "category": "卧室家具", "group": "睡眠家具",
+        "icon": "🛏️", "tags": ["卧室"], "score": "常用",
+        "rotationOffset": 90, "yOffset": 0
     },
-    "indoor_tree": {
-        "label": "室内树", "width": 1.0, "depth": 1.0, "height": 1.8,
-        "color": "#2e7d32", "material": "原木风", "category": "装饰", "group": "绿植装饰",
-        "icon": "🌳", "tags": ["装饰", "大株", "景观"], "score": "展示"
+    "cabinetBed": {
+        "label": "衣柜", "model": "cabinetBed.glb",
+        "width": 1.6, "depth": 0.6, "height": 2.0,
+        "color": "#c49a6c", "material": "木纹",
+        "category": "卧室家具", "group": "睡眠家具",
+        "icon": "🛏️", "tags": ["卧室", "收纳"], "score": "展示",
+        "rotationOffset": 0, "yOffset": 0
+    },
+    "cabinetBedDrawerTable": {
+        "label": "抽屉柜", "model": "cabinetBedDrawerTable.glb",
+        "width": 1.8, "depth": 0.6, "height": 0.8,
+        "color": "#c49a6c", "material": "木纹",
+        "category": "卧室家具", "group": "睡眠家具",
+        "icon": "🛏️", "tags": ["卧室", "收纳"], "score": "推荐",
+        "rotationOffset": 0, "yOffset": 0
+    },
+    
+    # 客厅家具
+    "loungeChair": {
+        "label": "休闲椅", "model": "loungeChair.glb",
+        "width": 0.8, "depth": 0.8, "height": 0.82,
+        "color": "#8d7b68", "material": "布艺",
+        "category": "客厅家具", "group": "坐具",
+        "icon": "🪑", "tags": ["客厅", "阅读"], "score": "高搭配",
+        "rotationOffset": 180, "yOffset": 0
+    },
+    "loungeChairRelax": {
+        "label": "躺椅", "model": "loungeChairRelax.glb",
+        "width": 1.0, "depth": 1.2, "height": 0.8,
+        "color": "#6f7d8c", "material": "布艺",
+        "category": "客厅家具", "group": "坐具",
+        "icon": "🪑", "tags": ["客厅", "休闲"], "score": "展示",
+        "rotationOffset": 180, "yOffset": 0
+    },
+    "loungeDesignChair": {
+        "label": "设计椅", "model": "loungeDesignChair.glb",
+        "width": 0.7, "depth": 0.7, "height": 0.8,
+        "color": "#333333", "material": "皮质",
+        "category": "客厅家具", "group": "坐具",
+        "icon": "🪑", "tags": ["客厅", "设计"], "score": "展示",
+        "rotationOffset": 180, "yOffset": 0
+    },
+    "loungeSofa": {
+        "label": "沙发", "model": "loungeSofa.glb",
+        "width": 1.8, "depth": 0.8, "height": 0.82,
+        "color": "#6f7d8c", "material": "布艺",
+        "category": "客厅家具", "group": "沙发",
+        "icon": "🛋️", "tags": ["客厅", "主件"], "score": "高人气",
+        "rotationOffset": 180, "yOffset": 0
+    },
+    "loungeSofaLong": {
+        "label": "长沙发", "model": "loungeSofaLong.glb",
+        "width": 2.5, "depth": 0.8, "height": 0.82,
+        "color": "#6f7d8c", "material": "布艺",
+        "category": "客厅家具", "group": "沙发",
+        "icon": "🛋️", "tags": ["客厅", "主件"], "score": "高人气",
+        "rotationOffset": 180, "yOffset": 0
+    },
+    "loungeDesignSofa": {
+        "label": "设计沙发", "model": "loungeDesignSofa.glb",
+        "width": 1.8, "depth": 0.8, "height": 0.8,
+        "color": "#333333", "material": "皮质",
+        "category": "客厅家具", "group": "沙发",
+        "icon": "🛋️", "tags": ["客厅", "设计"], "score": "展示",
+        "rotationOffset": 180, "yOffset": 0
+    },
+    "loungeDesignSofaCorner": {
+        "label": "转角沙发", "model": "loungeDesignSofaCorner.glb",
+        "width": 2.0, "depth": 2.0, "height": 0.8,
+        "color": "#333333", "material": "皮质",
+        "category": "客厅家具", "group": "沙发",
+        "icon": "🛋️", "tags": ["客厅", "转角"], "score": "展示",
+        "rotationOffset": 180, "yOffset": 0
+    },
+    "lampWall": {
+        "label": "壁灯", "model": "lampWall.glb",
+        "width": 0.2, "depth": 0.2, "height": 0.4,
+        "color": "#c49a6c", "material": "金属",
+        "category": "客厅家具", "group": "灯具",
+        "icon": "💡", "tags": ["客厅", "墙面"], "score": "搭配",
+        "rotationOffset": 0, "yOffset": 1.5
+    },
+    "tableCoffee": {
+        "label": "茶几", "model": "tableCoffee.glb",
+        "width": 1.0, "depth": 0.6, "height": 0.45,
+        "color": "#b58b62", "material": "木纹",
+        "category": "客厅家具", "group": "桌几",
+        "icon": "☕", "tags": ["客厅", "中心位"], "score": "热销",
+        "rotationOffset": 0, "yOffset": 0
+    },
+    "tableCoffeeGlass": {
+        "label": "玻璃茶几", "model": "tableCoffeeGlass.glb",
+        "width": 1.0, "depth": 0.6, "height": 0.45,
+        "color": "#d9d9d9", "material": "玻璃",
+        "category": "客厅家具", "group": "桌几",
+        "icon": "☕", "tags": ["客厅", "现代"], "score": "展示",
+        "rotationOffset": 0, "yOffset": 0
+    },
+    "rugRectangle": {
+        "label": "长方形地毯", "model": "rugRectangle.glb",
+        "width": 1.6, "depth": 1.2, "height": 0.02,
+        "color": "#8d7b68", "material": "布艺",
+        "category": "客厅家具", "group": "地毯",
+        "icon": "🧶", "tags": ["客厅", "地面"], "score": "搭配",
+        "rotationOffset": 0, "yOffset": 0
+    },
+    "rugRound": {
+        "label": "圆形地毯", "model": "rugRound.glb",
+        "width": 1.2, "depth": 1.2, "height": 0.02,
+        "color": "#8d7b68", "material": "布艺",
+        "category": "客厅家具", "group": "地毯",
+        "icon": "🧶", "tags": ["客厅", "地面"], "score": "搭配",
+        "rotationOffset": 0, "yOffset": 0
+    },
+    "rugRounded": {
+        "label": "圆角地毯", "model": "rugRounded.glb",
+        "width": 1.4, "depth": 1.0, "height": 0.02,
+        "color": "#8d7b68", "material": "布艺",
+        "category": "客厅家具", "group": "地毯",
+        "icon": "🧶", "tags": ["客厅", "地面"], "score": "搭配",
+        "rotationOffset": 0, "yOffset": 0
+    },
+    "rugDoormat": {
+        "label": "门垫", "model": "rugDoormat.glb",
+        "width": 0.8, "depth": 0.5, "height": 0.02,
+        "color": "#8d7b68", "material": "布艺",
+        "category": "客厅家具", "group": "地毯",
+        "icon": "🧶", "tags": ["门口"], "score": "常用",
+        "rotationOffset": 0, "yOffset": 0
+    },
+
+    
+    # 厨房家具
+    "kitchenBar": {
+        "label": "厨房吧台", "model": "kitchenBar.glb",
+        "width": 1.2, "depth": 0.6, "height": 1.0,
+        "color": "#c49a6c", "material": "木纹",
+        "category": "厨房家具", "group": "台面",
+        "icon": "🍷", "tags": ["厨房", "吧台"], "score": "展示",
+        "rotationOffset": 0, "yOffset": 0
+    },
+
+    "kitchenCabinet": {
+        "label": "厨柜", "model": "kitchenCabinet.glb",
+        "width": 1.6, "depth": 0.6, "height": 0.92,
+        "color": "#d7d7d7", "material": "木纹",
+        "category": "厨房家具", "group": "收纳",
+        "icon": "🍳", "tags": ["厨房", "收纳"], "score": "常用",
+        "rotationOffset": 0, "yOffset": 0
+    },
+    "kitchenCabinetDrawer": {
+        "label": "抽屉柜", "model": "kitchenCabinetDrawer.glb",
+        "width": 0.8, "depth": 0.6, "height": 0.8,
+        "color": "#d7d7d7", "material": "木纹",
+        "category": "厨房家具", "group": "收纳",
+        "icon": "🗄️", "tags": ["厨房", "收纳"], "score": "常用",
+        "rotationOffset": 0, "yOffset": 0
+    },
+
+    "kitchenFridgeLarge": {
+        "label": "大冰箱", "model": "kitchenFridgeLarge.glb",
+        "width": 0.6, "depth": 0.6, "height": 1.8,
+        "color": "#ffffff", "material": "金属",
+        "category": "厨房家具", "group": "电器",
+        "icon": "🧊", "tags": ["厨房", "电器"], "score": "常用",
+        "rotationOffset": 0, "yOffset": 0
+    },
+    "kitchenFridgeSmall": {
+        "label": "小冰箱", "model": "kitchenFridgeSmall.glb",
+        "width": 0.4, "depth": 0.4, "height": 0.8,
+        "color": "#ffffff", "material": "金属",
+        "category": "厨房家具", "group": "电器",
+        "icon": "🧊", "tags": ["厨房", "电器"], "score": "搭配",
+        "rotationOffset": 0, "yOffset": 0
+    },
+
+    "kitchenSink": {
+        "label": "厨房水槽", "model": "kitchenSink.glb",
+        "width": 0.6, "depth": 0.5, "height": 0.2,
+        "color": "#eef2f6", "material": "不锈钢",
+        "category": "厨房家具", "group": "洁具",
+        "icon": "🚰", "tags": ["厨房", "水槽"], "score": "常用",
+        "rotationOffset": 0, "yOffset": 0
+    },
+
+    
+    # 书房/办公家具
+    "bookcaseClosedDoors": {
+        "label": "带门书柜", "model": "bookcaseClosedDoors.glb",
+        "width": 1.2, "depth": 0.4, "height": 1.8,
+        "color": "#c49a6c", "material": "木纹",
+        "category": "书房/办公家具", "group": "收纳",
+        "icon": "📚", "tags": ["书房", "收纳"], "score": "常用",
+        "rotationOffset": 0, "yOffset": 0
+    },
+    "bookcaseClosedWide": {
+        "label": "宽书柜", "model": "bookcaseClosedWide.glb",
+        "width": 1.6, "depth": 0.4, "height": 1.8,
+        "color": "#c49a6c", "material": "木纹",
+        "category": "书房/办公家具", "group": "收纳",
+        "icon": "📚", "tags": ["书房", "收纳"], "score": "常用",
+        "rotationOffset": 0, "yOffset": 0
+    },
+    "bookcaseOpenLow": {
+        "label": "矮书柜", "model": "bookcaseOpenLow.glb",
+        "width": 1.2, "depth": 0.4, "height": 1.0,
+        "color": "#c49a6c", "material": "木纹",
+        "category": "书房/办公家具", "group": "收纳",
+        "icon": "📚", "tags": ["书房", "收纳"], "score": "搭配",
+        "rotationOffset": 0, "yOffset": 0
+    },
+
+    "chairDesk": {
+        "label": "办公椅", "model": "chairDesk.glb",
+        "width": 0.6, "depth": 0.6, "height": 0.9,
+        "color": "#6f7d8c", "material": "布艺",
+        "category": "书房/办公家具", "group": "坐具",
+        "icon": "🪑", "tags": ["书房", "办公"], "score": "常用",
+        "rotationOffset": 0, "yOffset": 0
+    },
+
+    "desk": {
+        "label": "书桌", "model": "desk.glb",
+        "width": 1.2, "depth": 0.6, "height": 0.75,
+        "color": "#b8956a", "material": "木纹",
+        "category": "书房/办公家具", "group": "桌几",
+        "icon": "📝", "tags": ["书房", "办公"], "score": "常用",
+        "rotationOffset": 0, "yOffset": 0
+    },
+    "table": {
+        "label": "桌子", "model": "table.glb",
+        "width": 1.4, "depth": 0.8, "height": 0.75,
+        "color": "#b8956a", "material": "木纹",
+        "category": "书房/办公家具", "group": "桌几",
+        "icon": "🪑", "tags": ["餐厅", "办公"], "score": "常用",
+        "rotationOffset": 0, "yOffset": 0
+    },
+    "tableGlass": {
+        "label": "玻璃桌", "model": "tableGlass.glb",
+        "width": 1.4, "depth": 0.8, "height": 0.75,
+        "color": "#d9d9d9", "material": "玻璃",
+        "category": "书房/办公家具", "group": "桌几",
+        "icon": "🪑", "tags": ["现代", "办公"], "score": "展示",
+        "rotationOffset": 0, "yOffset": 0
+    },
+    "tableRound": {
+        "label": "圆桌", "model": "tableRound.glb",
+        "width": 1.2, "depth": 1.2, "height": 0.75,
+        "color": "#b8956a", "material": "木纹",
+        "category": "书房/办公家具", "group": "桌几",
+        "icon": "🪑", "tags": ["餐厅", "圆形"], "score": "搭配",
+        "rotationOffset": 0, "yOffset": 0
+    },
+
+    
+    # 电器设备
+    "dryer": {
+        "label": "烘干机", "model": "dryer.glb",
+        "width": 0.6, "depth": 0.6, "height": 0.8,
+        "color": "#ffffff", "material": "金属",
+        "category": "电器设备", "group": "家电",
+        "icon": "👕", "tags": ["洗衣", "电器"], "score": "常用",
+        "rotationOffset": 0, "yOffset": 0
+    },
+    "washer": {
+        "label": "洗衣机", "model": "washer.glb",
+        "width": 0.6, "depth": 0.6, "height": 0.8,
+        "color": "#ffffff", "material": "金属",
+        "category": "电器设备", "group": "家电",
+        "icon": "👕", "tags": ["洗衣", "电器"], "score": "常用",
+        "rotationOffset": 0, "yOffset": 0
+    },
+    "lampRoundFloor": {
+        "label": "落地灯", "model": "lampRoundFloor.glb",
+        "width": 0.3, "depth": 0.3, "height": 1.5,
+        "color": "#c49a6c", "material": "金属",
+        "category": "电器设备", "group": "灯具",
+        "icon": "💡", "tags": ["照明", "客厅"], "score": "搭配",
+        "rotationOffset": 0, "yOffset": 0
+    },
+    "lampSquareFloor": {
+        "label": "方形落地灯", "model": "lampSquareFloor.glb",
+        "width": 0.3, "depth": 0.3, "height": 1.5,
+        "color": "#333333", "material": "金属",
+        "category": "电器设备", "group": "灯具",
+        "icon": "💡", "tags": ["照明", "现代"], "score": "展示",
+        "rotationOffset": 0, "yOffset": 0
+    },
+    
+    # 其他物品
+
+    "cabinetTelevision": {
+        "label": "电视柜", "model": "cabinetTelevision.glb",
+        "width": 1.4, "depth": 0.4, "height": 0.68,
+        "color": "#2b3038", "material": "木纹",
+        "category": "其他物品", "group": "收纳",
+        "icon": "📺", "tags": ["客厅", "收纳"], "score": "常用",
+        "rotationOffset": 0, "yOffset": 0
+    },
+    "cabinetTelevisionDoors": {
+        "label": "带门电视柜", "model": "cabinetTelevisionDoors.glb",
+        "width": 1.4, "depth": 0.4, "height": 0.68,
+        "color": "#2b3038", "material": "木纹",
+        "category": "其他物品", "group": "收纳",
+        "icon": "📺", "tags": ["客厅", "收纳"], "score": "常用",
+        "rotationOffset": 0, "yOffset": 0
+    },
+    "coatRack": {
+        "label": "衣帽架", "model": "coatRack.glb",
+        "width": 0.3, "depth": 0.3, "height": 1.8,
+        "color": "#c49a6c", "material": "木纹",
+        "category": "其他物品", "group": "收纳",
+        "icon": "🧥", "tags": ["门口", "收纳"], "score": "常用",
+        "rotationOffset": 0, "yOffset": 0
+    },
+    "coatRackStanding": {
+        "label": "落地衣帽架", "model": "coatRackStanding.glb",
+        "width": 0.5, "depth": 0.5, "height": 1.8,
+        "color": "#c49a6c", "material": "木纹",
+        "category": "其他物品", "group": "收纳",
+        "icon": "🧥", "tags": ["门口", "收纳"], "score": "常用",
+        "rotationOffset": 0, "yOffset": 0
+    },
+    "plantSmall1": {
+        "label": "小植物1", "model": "plantSmall1.glb",
+        "width": 0.2, "depth": 0.2, "height": 0.3,
+        "color": "#4caf50", "material": "植物",
+        "category": "其他物品", "group": "绿植",
+        "icon": "🪴", "tags": ["装饰", "绿植"], "score": "搭配",
+        "rotationOffset": 0, "yOffset": 0
+    },
+    "plantSmall2": {
+        "label": "小植物2", "model": "plantSmall2.glb",
+        "width": 0.2, "depth": 0.2, "height": 0.3,
+        "color": "#4caf50", "material": "植物",
+        "category": "其他物品", "group": "绿植",
+        "icon": "🪴", "tags": ["装饰", "绿植"], "score": "搭配",
+        "rotationOffset": 0, "yOffset": 0
+    },
+    "plantSmall3": {
+        "label": "小植物3", "model": "plantSmall3.glb",
+        "width": 0.2, "depth": 0.2, "height": 0.3,
+        "color": "#4caf50", "material": "植物",
+        "category": "其他物品", "group": "绿植",
+        "icon": "🪴", "tags": ["装饰", "绿植"], "score": "搭配",
+        "rotationOffset": 0, "yOffset": 0
+    },
+    "pottedPlant": {
+        "label": "盆栽", "model": "pottedPlant.glb",
+        "width": 0.4, "depth": 0.4, "height": 0.6,
+        "color": "#4caf50", "material": "植物",
+        "category": "其他物品", "group": "绿植",
+        "icon": "🪴", "tags": ["装饰", "绿植"], "score": "推荐",
+        "rotationOffset": 0, "yOffset": 0
+    },
+    "trashcan": {
+        "label": "垃圾桶", "model": "trashcan.glb",
+        "width": 0.3, "depth": 0.3, "height": 0.4,
+        "color": "#666666", "material": "塑料",
+        "category": "其他物品", "group": "收纳",
+        "icon": "🗑️", "tags": ["厨房", "收纳"], "score": "常用",
+        "rotationOffset": 0, "yOffset": 0
+    },
+    "stoolBar": {
+        "label": "吧凳", "model": "stoolBar.glb",
+        "width": 0.3, "depth": 0.3, "height": 0.75,
+        "color": "#c49a6c", "material": "木纹",
+        "category": "其他物品", "group": "坐具",
+        "icon": "🪑", "tags": ["厨房", "吧台"], "score": "搭配",
+        "rotationOffset": 0, "yOffset": 0
+    },
+    "stoolBarSquare": {
+        "label": "方形吧凳", "model": "stoolBarSquare.glb",
+        "width": 0.3, "depth": 0.3, "height": 0.75,
+        "color": "#c49a6c", "material": "木纹",
+        "category": "其他物品", "group": "坐具",
+        "icon": "🪑", "tags": ["厨房", "吧台"], "score": "搭配",
+        "rotationOffset": 0, "yOffset": 0
+    },
+    "benchCushion": {
+        "label": "长凳", "model": "benchCushion.glb",
+        "width": 1.2, "depth": 0.4, "height": 0.4,
+        "color": "#6f7d8c", "material": "布艺",
+        "category": "其他物品", "group": "坐具",
+        "icon": "🪑", "tags": ["客厅", "长凳"], "score": "搭配",
+        "rotationOffset": 0, "yOffset": 0
+    },
+    "chairCushion": {
+        "label": "带垫椅子", "model": "chairCushion.glb",
+        "width": 0.5, "depth": 0.5, "height": 0.9,
+        "color": "#6f7d8c", "material": "布艺",
+        "category": "其他物品", "group": "坐具",
+        "icon": "🪑", "tags": ["餐厅", "坐具"], "score": "常用",
+        "rotationOffset": 180, "yOffset": 0
+    },
+    "chairModernCushion": {
+        "label": "现代椅子", "model": "chairModernCushion.glb",
+        "width": 0.5, "depth": 0.5, "height": 0.9,
+        "color": "#333333", "material": "布艺",
+        "category": "其他物品", "group": "坐具",
+        "icon": "🪑", "tags": ["现代", "坐具"], "score": "展示",
+        "rotationOffset": 180, "yOffset": 0
+    },
+    "chairRounded": {
+        "label": "圆形椅子", "model": "chairRounded.glb",
+        "width": 0.5, "depth": 0.5, "height": 0.9,
+        "color": "#6f7d8c", "material": "布艺",
+        "category": "其他物品", "group": "坐具",
+        "icon": "🪑", "tags": ["现代", "坐具"], "score": "展示",
+        "rotationOffset": 180, "yOffset": 0
     },
 }
 
 FURNITURE_GROUPS = {k: v["group"] for k, v in FURNITURE_DEFAULTS.items()}
 FURNITURE_ALIASES = {
-    "沙发": "sofa", "单人椅": "armchair", "电视": "tv", "电视柜": "tv", "茶几": "coffee_table",
-    "边柜": "sideboard", "衣柜": "wardrobe", "餐桌": "dining_table", "餐椅": "dining_chair",
-    "床": "bed", "书桌": "desk", "床头柜": "nightstand", "书架": "bookshelf", "橱柜": "kitchen_counter",
-    "台面": "kitchen_counter", "洗手台": "sink", "洗漱台": "sink", "马桶": "toilet", "浴缸": "bathtub",
-    "绿植": "potted_plant", "盆栽": "potted_plant", "花草": "flower_pot", "花": "flower_pot", "树": "indoor_tree", "树木": "indoor_tree",
+    # 浴室家具
+    "浴室柜": "bathroomCabinet",
+    "浴室洗手盆": "bathroomSink",
+
+    "浴缸": "bathtub",
+    "淋浴间": "shower",
+    "圆形淋浴间": "showerRound",
+    "马桶": "toilet",
+    
+    # 卧室家具
+    "双层床": "bedBunk",
+    "双人床": "bedDouble",
+    "单人床": "bedSingle",
+    "多功能柜": "cabinetBed",
+    "抽屉桌": "cabinetBedDrawerTable",
+    
+    # 客厅家具
+    "带坐垫的长椅": "benchCushion",
+    "带坐垫的椅子": "chairCushion",
+    "现代带坐垫的椅子": "chairModernCushion",
+    "圆角椅子": "chairRounded",
+    "休闲椅": "loungeChair",
+    "放松休闲椅": "loungeChairRelax",
+    "设计款休闲椅": "loungeDesignChair",
+    "设计款沙发": "loungeDesignSofa",
+    "设计款转角沙发": "loungeDesignSofaCorner",
+    "沙发": "loungeSofa",
+    "长沙发": "loungeSofaLong",
+
+    "门垫": "rugDoormat",
+    "长方形地毯": "rugRectangle",
+    "圆形地毯": "rugRound",
+    "圆角地毯": "rugRounded",
+    "咖啡桌": "tableCoffee",
+    "玻璃咖啡桌": "tableCoffeeGlass",
+    "壁灯": "lampWall",
+    
+    # 厨房家具
+    "厨房吧台": "kitchenBar",
+    "厨柜": "kitchenCabinet",
+    "抽屉柜": "kitchenCabinetDrawer",
+    "大冰箱": "kitchenFridgeLarge",
+    "小冰箱": "kitchenFridgeSmall",
+    "厨房水槽": "kitchenSink",
+    
+    # 书房/办公家具
+    "带门书柜": "bookcaseClosedDoors",
+    "宽书柜": "bookcaseClosedWide",
+    "矮书柜": "bookcaseOpenLow",
+    "办公椅": "chairDesk",
+    "书桌": "desk",
+    "桌子": "table",
+    "玻璃桌": "tableGlass",
+    "圆桌": "tableRound",
+    
+    # 电器设备
+    "烘干机": "dryer",
+    "洗衣机": "washer",
+    "落地灯": "lampRoundFloor",
+    "方形落地灯": "lampSquareFloor",
+    
+    # 其他物品
+
+    "电视柜": "cabinetTelevision",
+    "带门电视柜": "cabinetTelevisionDoors",
+    "衣帽架": "coatRack",
+    "落地衣帽架": "coatRackStanding",
+    "小植物1": "plantSmall1",
+    "小植物2": "plantSmall2",
+    "小植物3": "plantSmall3",
+    "盆栽": "pottedPlant",
+    "垃圾桶": "trashcan",
+    "吧凳": "stoolBar",
+    "方形吧凳": "stoolBarSquare",
+}
+
+# 旧家具类型映射到新家具类型
+LEGACY_FURNITURE_TYPE_MAP = {
+    "sofa": "loungeSofa",
+    "armchair": "loungeChair",
+    "tv": "cabinetTelevision",
+    "coffee_table": "tableCoffee",
+    "sideboard": "cabinetTelevisionDoors",
+    "bed": "bedDouble",
+    "wardrobe": "bookcaseClosedWide",
+    "nightstand": "cabinetBedDrawerTable",
+    "bookshelf": "bookcaseOpenLow",
+    "dining_table": "table",
+    "dining_chair": "chairCushion",
+    "kitchen_counter": "kitchenCabinet",
+    "sink": "bathroomSink",
+    "potted_plant": "pottedPlant",
+    "flower_pot": "plantSmall2",
+    "indoor_tree": "plantSmall3",
 }
 
 
@@ -209,7 +689,7 @@ class GameState:
     def __init__(self) -> None:
         self.grid_size_m = 0.5
         self.show_grid = True
-        self.message = "欢迎来到装修小游戏工作台 "
+        self.message = "欢迎来到装修小游戏工作台。"
         self.rooms: List[Room] = [
             Room("room_1", "客厅", 0.0, 0.0, 4.8, 4.0, wall_material="原木风", wall_color="#ede6d8"),
             Room("room_2", "饭厅", 4.8, 0.0, 3.0, 3.0, wall_material="白色瓷砖", wall_color="#f7f4ee"),
@@ -251,20 +731,20 @@ class GameState:
 
     def undo(self) -> str:
         if not self.history:
-            self.message = "没有可撤销的操作 "
+            self.message = "没有可撤销的操作。"
             return self.message
         self.future.append(copy.deepcopy(self.snapshot()))
         self.restore(self.history.pop())
-        self.message = "已撤销上一步 "
+        self.message = "已撤销上一步。"
         return self.message
 
     def redo(self) -> str:
         if not self.future:
-            self.message = "没有可重做的操作 "
+            self.message = "没有可重做的操作。"
             return self.message
         self.history.append(copy.deepcopy(self.snapshot()))
         self.restore(self.future.pop())
-        self.message = "已恢复刚才撤销的操作 "
+        self.message = "已恢复刚才撤销的操作。"
         return self.message
 
     def to_dict(self) -> Dict:
@@ -278,6 +758,7 @@ class GameState:
                     {
                         "value": ftype,
                         "label": meta["label"],
+                        "model": meta.get("model"),
                         "category": meta["category"],
                         "group": meta["group"],
                         "width": meta["width"],
@@ -288,6 +769,8 @@ class GameState:
                         "icon": meta.get("icon", "🧩"),
                         "tags": meta.get("tags", []),
                         "score": meta.get("score", "基础"),
+                        "rotationOffset": meta.get("rotationOffset", 0),
+                        "yOffset": meta.get("yOffset", 0),
                     }
                     for ftype, meta in FURNITURE_DEFAULTS.items()
                 ],
@@ -433,7 +916,7 @@ def add_furniture(
     label: Optional[str] = None,
 ) -> tuple[bool, str, Optional[Furniture]]:
     if ftype not in FURNITURE_DEFAULTS:
-        return False, "家具类型不存在 ", None
+        return False, "家具类型不存在。", None
 
     meta = FURNITURE_DEFAULTS[ftype]
     item = Furniture(
@@ -455,10 +938,10 @@ def add_furniture(
     clamp_furniture_inside_room(item)
     snap_furniture(item)
     if collides(item):
-        return False, f"{item.label}放置失败：与其他家具重叠 ", None
+        return False, f"{item.label}放置失败：与其他家具重叠。", None
 
     STATE.furnitures.append(item)
-    return True, f"已添加{item.label} ", item
+    return True, f"已添加{item.label}。", item
 
 
 def update_furniture(item: Furniture, payload: Dict) -> tuple[bool, str]:
@@ -499,14 +982,14 @@ def update_furniture(item: Furniture, payload: Dict) -> tuple[bool, str]:
     if collides(item):
         for k, v in old.items():
             setattr(item, k, v)
-        return False, f"{item.label}调整失败：与其他家具重叠 "
+        return False, f"{item.label}调整失败：与其他家具重叠。"
 
-    return True, f"{item.label}已更新 "
+    return True, f"{item.label}已更新。"
 
 
 def delete_furniture(item: Furniture) -> str:
     STATE.furnitures = [f for f in STATE.furnitures if f.id != item.id]
-    return f"已删除{item.label} "
+    return f"已删除{item.label}。"
 
 
 def update_room(room: Room, payload: Dict) -> tuple[bool, str]:
@@ -520,8 +1003,8 @@ def update_room(room: Room, payload: Dict) -> tuple[bool, str]:
             value = float(value)
         setattr(room, key, value)
 
-    room.width = clamp(room.width, 1.6, 12.0)
-    room.depth = clamp(room.depth, 1.6, 12.0)
+    room.width = clamp(room.width, 1.6, float('inf'))
+    room.depth = clamp(room.depth, 1.6, float('inf'))
 
     for item in STATE.furnitures:
         if item.room_id == room.id:
@@ -537,16 +1020,16 @@ def update_room(room: Room, payload: Dict) -> tuple[bool, str]:
         if not (room.x + room.width <= other.x or other.x + other.width <= room.x or room.y + room.depth <= other.y or other.y + other.depth <= room.y):
             for k, v in old.items():
                 setattr(room, k, v)
-            return False, f"{room.name}调整失败：与{other.name}重叠 "
+            return False, f"{room.name}调整失败：与{other.name}重叠。"
 
-    return True, f"{room.name}已更新 "
+    return True, f"{room.name}已更新。"
 
 
 def delete_room(room: Room) -> str:
     STATE.rooms = [r for r in STATE.rooms if r.id != room.id]
     STATE.furnitures = [f for f in STATE.furnitures if f.room_id != room.id]
     STATE.openings = [o for o in STATE.openings if o.room_id != room.id]
-    return f"已删除{room.name}及其相关家具、门窗 "
+    return f"已删除{room.name}及其相关家具、门窗。"
 
 
 def room_overlaps(room: Room) -> Optional[Room]:
@@ -613,17 +1096,17 @@ def add_room(
 
     overlap = room_overlaps(room)
     if overlap:
-        return False, f"新增房间失败：与{overlap.name}重叠 ", None
+        return False, f"新增房间失败：与{overlap.name}重叠。", None
 
     STATE.rooms.append(room)
     if room_x != x or room_y != y:
-        return True, f"已添加{room.name}，并自动避让到空位置 ", room
-    return True, f"已添加{room.name} ", room
+        return True, f"已添加{room.name}，并自动避让到空位置。", room
+    return True, f"已添加{room.name}。", room
 
 
 def add_opening(room: Room, opening_type: str, wall: str, offset: float, width: float, name: Optional[str] = None) -> tuple[bool, str, Optional[Opening]]:
     if opening_type not in OPENING_TYPE_LABELS or wall not in WALLS:
-        return False, "门窗参数不正确 ", None
+        return False, "门窗参数不正确。", None
 
     same_type_count = len([o for o in STATE.openings if o.type == opening_type and o.room_id == room.id]) + 1
     opening = Opening(
@@ -642,7 +1125,7 @@ def add_opening(room: Room, opening_type: str, wall: str, offset: float, width: 
 
     clamp_opening(opening)
     STATE.openings.append(opening)
-    return True, f"已为{room.name}添加{OPENING_TYPE_LABELS[opening_type]} ", opening
+    return True, f"已为{room.name}添加{OPENING_TYPE_LABELS[opening_type]}。", opening
 
 
 def update_opening(opening: Opening, payload: Dict) -> tuple[bool, str]:
@@ -667,12 +1150,12 @@ def update_opening(opening: Opening, payload: Dict) -> tuple[bool, str]:
             setattr(opening, key, value)
 
     clamp_opening(opening)
-    return True, f"已更新{opening.name or OPENING_TYPE_LABELS[opening.type]} "
+    return True, f"已更新{opening.name or OPENING_TYPE_LABELS[opening.type]}。"
 
 
 def delete_opening(opening: Opening) -> str:
     STATE.openings = [o for o in STATE.openings if o.id != opening.id]
-    return f"已删除{opening.name or OPENING_TYPE_LABELS[opening.type]} "
+    return f"已删除{opening.name or OPENING_TYPE_LABELS[opening.type]}。"
 
 
 def parse_distance(text: str, default: float = 0.9) -> float:
@@ -702,111 +1185,38 @@ def detect_furniture_type(text: str) -> Optional[str]:
 
 
 def call_ark_chat_json(system_prompt: str, user_prompt: str, max_tokens: int = 260) -> Dict:
-    if is_placeholder_api_key(ARK_API_KEY):
-        raise RuntimeError(
-            "未配置火山方舟 API Key 请先在火山方舟控制台的“API Key 管理”创建 Key，"
-            "再把它写入环境变量 ARK_API_KEY，或直接修改 app.py 顶部的 ARK_API_KEY 配置 "
-        )
-
-    payload = {
-        "model": ARK_MODEL,
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
-        ],
-        "temperature": 0.1,
-        "max_tokens": max_tokens,
-        "stream": False,
-        "response_format": {"type": "json_object"},
+    """
+    无 API 部署版本：
+    不调用火山方舟/DeepSeek，只做本地安全兜底。
+    """
+    command = user_prompt
+    if "语音转文字结果：" in command:
+        command = command.split("语音转文字结果：", 1)[-1]
+    command = command.strip()
+    return {
+        "command": command,
+        "reason": "无 API 部署版本，已直接使用本地识别文本作为指令。",
+        "confidence": "medium"
     }
-
-    req = urllib.request.Request(
-        ARK_API_URL,
-        data=json.dumps(payload).encode("utf-8"),
-        headers={
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {ARK_API_KEY}",
-        },
-        method="POST",
-    )
-
-    try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            raw = resp.read().decode("utf-8")
-    except urllib.error.HTTPError as exc:
-        detail = exc.read().decode("utf-8", errors="ignore")
-        if exc.code == 401:
-            raise RuntimeError(
-                "HTTP 401：火山方舟鉴权失败 请检查 ARK_API_KEY 是否为“API Key 管理”页面新建的有效 Key "
-                + (f" 服务端返回：{detail}" if detail else "")
-            ) from exc
-        if exc.code == 404:
-            raise RuntimeError(
-                "HTTP 404：火山方舟接口地址或模型标识不正确 请检查 ARK_API_URL 与 ARK_MODEL（或 ARK_ENDPOINT_ID） "
-                + (f" 服务端返回：{detail}" if detail else "")
-            ) from exc
-        raise RuntimeError(f"HTTP {exc.code}：{detail or '火山方舟接口调用失败 '}") from exc
-    except urllib.error.URLError as exc:
-        raise RuntimeError(f"网络连接失败：{exc.reason}") from exc
-
-    try:
-        result = json.loads(raw)
-        content = result["choices"][0]["message"]["content"]
-        return json.loads(content)
-    except Exception as exc:
-        raise RuntimeError(f"模型返回结果解析失败：{raw[:400]}") from exc
 
 
 def normalize_voice_command_with_llm(transcript: str) -> Dict:
-    room_names = "、".join(room.name for room in STATE.rooms) or "无"
-    furniture_names = "、".join(sorted(set(meta["label"] for meta in FURNITURE_DEFAULTS.values())))
-    color_names = "、".join(COLOR_MAP.keys())
-
-    system_prompt = f"""
-你是装修模拟小游戏的语音指令归一化助手 
-你的任务是把“语音转文字结果”纠错、补全并改写成这个小游戏可执行的一句中文指令 
-
-当前房间：{room_names}
-可识别家具：{furniture_names}
-可识别颜色：{color_names}
-
-你只能输出 JSON 对象，格式固定为：
-{{
-  "command": "可执行的单句中文指令；如果无法确定则输出空字符串",
-  "reason": "一句简短说明",
-  "confidence": "high 或 medium 或 low"
-}}
-
-优先输出下列形式之一：
-1. 给{{房间名}}添加{{家具名}}
-2. 给{{房间名}}{{左墙/右墙/上墙/下墙}}添加门
-3. 给{{房间名}}添加窗
-4. 添加房间
-5. 撤销
-6. 重做
-7. 显示网格
-8. 隐藏网格
-9. 删除{{家具名}}
-10. 删除{{房间名}}的{{家具名}}
-11. 把{{家具名}}改成{{颜色名}}
-12. 把{{房间名}}宽度改为{{数字}}米
-13. 把{{房间名}}深度改为{{数字}}米
-
-规则：
-- 允许纠正明显口误、同音字、ASR 误识别 
-- 只保留一条最核心、最可执行的命令 
-- 如果内容不明确、超出能力范围或不是装修操作，command 置空 
-- 不要输出 markdown，不要输出多余解释 
-""".strip()
-
-    user_prompt = f"语音转文字结果：{transcript}"
-    return call_ark_chat_json(system_prompt, user_prompt)
+    """
+    无 API 部署版本：
+    语音转文字结果不再交给大模型纠错，而是直接作为本地指令执行。
+    """
+    transcript = (transcript or "").strip()
+    return {
+        "command": transcript,
+        "reason": "无 API 部署版本，使用本地规则直接执行语音文本。",
+        "confidence": "medium" if transcript else "low"
+    }
 
 
 def apply_command(text: str) -> str:
     text = text.strip()
     if not text:
-        return "请输入指令 "
+        return "请输入指令。"
 
     if "撤销" in text:
         return STATE.undo()
@@ -815,11 +1225,11 @@ def apply_command(text: str) -> str:
 
     if "网格" in text and any(w in text for w in ["显示", "开启"]):
         STATE.show_grid = True
-        return "已显示网格 "
+        return "已显示网格。"
 
     if "网格" in text and any(w in text for w in ["隐藏", "关闭"]):
         STATE.show_grid = False
-        return "已隐藏网格 "
+        return "已隐藏网格。"
 
     room = detect_room(text)
     ftype = detect_furniture_type(text)
@@ -869,14 +1279,14 @@ def apply_command(text: str) -> str:
             if item:
                 return delete_furniture(item)
             else:
-                return f"{room.name}的{ftype}不存在 "
+                return f"{room.name}的{ftype}不存在。"
         else:
             # 没有指定房间，保持原有逻辑
             item = next((f for f in STATE.furnitures if f.type == ftype), None)
             if item:
                 return delete_furniture(item)
             else:
-                return f"{ftype}不存在 "
+                return f"{ftype}不存在。"
 
     if ftype and color:
         if room:
@@ -886,7 +1296,7 @@ def apply_command(text: str) -> str:
                 ok, msg = update_furniture(item, {"color": color})
                 return msg if ok else msg
             else:
-                return f"{room.name}的{ftype}不存在 "
+                return f"{room.name}的{ftype}不存在。"
         else:
             # 没有指定房间，保持原有逻辑
             item = next((f for f in STATE.furnitures if f.type == ftype), None)
@@ -894,9 +1304,9 @@ def apply_command(text: str) -> str:
                 ok, msg = update_furniture(item, {"color": color})
                 return msg if ok else msg
             else:
-                return f"{ftype}不存在 "
+                return f"{ftype}不存在。"
 
-    return "暂未识别该指令 可尝试：给客厅添加沙发、给客厅左墙添加门、给卧室添加窗、添加房间、删除客厅的沙发 "
+    return "暂未识别该指令。可尝试：给客厅添加沙发、给客厅左墙添加门、给卧室添加窗、添加房间、删除客厅的沙发。"
 
 
 @app.route("/")
@@ -915,7 +1325,7 @@ def api_voice_command():
     payload = request.get_json(silent=True) or {}
     transcript = str(payload.get("transcript", "")).strip()
     if not transcript:
-        return jsonify({"ok": False, "message": "未接收到语音转文字内容 ", "state": STATE.to_dict()}), 400
+        return jsonify({"ok": False, "message": "未接收到语音转文字内容。", "state": STATE.to_dict()}), 400
 
     try:
         llm_result = normalize_voice_command_with_llm(transcript)
@@ -934,7 +1344,7 @@ def api_voice_command():
     llm_confidence = str(llm_result.get("confidence", "")).strip() or "unknown"
 
     if not normalized_command:
-        msg = f"语音已识别，但 {ARK_MODEL_LABEL} 暂未判断出可执行指令 {(' 原因：' + llm_reason) if llm_reason else ''}"
+        msg = f"语音已识别，但 {ARK_MODEL_LABEL} 暂未判断出可执行指令。{(' 原因：' + llm_reason) if llm_reason else ''}"
         STATE.message = msg
         return jsonify({
             "ok": False,
@@ -1016,11 +1426,20 @@ def api_import():
         # 导入家具
         if "furnitures" in payload:
             for furniture_data in payload["furnitures"]:
+                furniture_type = furniture_data.get("type", "loungeSofa")
+                # 映射旧家具类型到新家具类型
+                furniture_type = LEGACY_FURNITURE_TYPE_MAP.get(furniture_type, furniture_type)
+
+                # 如果AI返回的家具类型不在当前模型库里，直接跳过
+                if furniture_type not in FURNITURE_DEFAULTS:
+                    print(f"跳过未知家具类型: {furniture_type}")
+                    continue
+
                 furniture = Furniture(
                     id=furniture_data.get("id"),
-                    type=furniture_data.get("type", "sofa"),
+                    type=furniture_type,
                     label=furniture_data.get("label", "家具"),
-                    room_id=furniture_data.get("room_id"),
+                    room_id=furniture_data.get("room_id") or (STATE.rooms[0].id if STATE.rooms else None),
                     x=furniture_data.get("x", 0),
                     y=furniture_data.get("y", 0),
                     z=furniture_data.get("z", 0),
@@ -1071,7 +1490,7 @@ def api_add_furniture():
     if not room and payload.get("x") is not None and payload.get("y") is not None:
         room = find_room_for_point(float(payload["x"]), float(payload["y"]))
     if not room:
-        return jsonify({"ok": False, "message": "请选择一个放置房间 "}), 400
+        return jsonify({"ok": False, "message": "请选择一个放置房间。"}), 400
 
     STATE.push_history()
     ok, msg, item = add_furniture(
@@ -1094,7 +1513,7 @@ def api_add_furniture():
 def api_update_furniture(item_id: str):
     item = furniture_by_id(item_id)
     if not item:
-        return jsonify({"ok": False, "message": "家具不存在 "}), 404
+        return jsonify({"ok": False, "message": "家具不存在。"}), 404
 
     STATE.push_history()
     ok, msg = update_furniture(item, request.get_json(silent=True) or {})
@@ -1106,7 +1525,7 @@ def api_update_furniture(item_id: str):
 def api_delete_furniture(item_id: str):
     item = furniture_by_id(item_id)
     if not item:
-        return jsonify({"ok": False, "message": "家具不存在 "}), 404
+        return jsonify({"ok": False, "message": "家具不存在。"}), 404
 
     STATE.push_history()
     msg = delete_furniture(item)
@@ -1135,7 +1554,7 @@ def api_add_room():
 def api_update_room(room_id: str):
     room = room_by_id(room_id)
     if not room:
-        return jsonify({"ok": False, "message": "房间不存在 "}), 404
+        return jsonify({"ok": False, "message": "房间不存在。"}), 404
 
     STATE.push_history()
     ok, msg = update_room(room, request.get_json(silent=True) or {})
@@ -1147,7 +1566,7 @@ def api_update_room(room_id: str):
 def api_delete_room(room_id: str):
     room = room_by_id(room_id)
     if not room:
-        return jsonify({"ok": False, "message": "房间不存在 "}), 404
+        return jsonify({"ok": False, "message": "房间不存在。"}), 404
 
     STATE.push_history()
     msg = delete_room(room)
@@ -1160,7 +1579,7 @@ def api_add_opening():
     payload = request.get_json(silent=True) or {}
     room = room_by_id(payload.get("room_id"))
     if not room:
-        return jsonify({"ok": False, "message": "房间不存在 "}), 404
+        return jsonify({"ok": False, "message": "房间不存在。"}), 404
 
     STATE.push_history()
     ok, msg, opening = add_opening(
@@ -1179,7 +1598,7 @@ def api_add_opening():
 def api_update_opening(opening_id: str):
     opening = opening_by_id(opening_id)
     if not opening:
-        return jsonify({"ok": False, "message": "门窗不存在 "}), 404
+        return jsonify({"ok": False, "message": "门窗不存在。"}), 404
 
     STATE.push_history()
     ok, msg = update_opening(opening, request.get_json(silent=True) or {})
@@ -1191,7 +1610,7 @@ def api_update_opening(opening_id: str):
 def api_delete_opening(opening_id: str):
     opening = opening_by_id(opening_id)
     if not opening:
-        return jsonify({"ok": False, "message": "门窗不存在 "}), 404
+        return jsonify({"ok": False, "message": "门窗不存在。"}), 404
 
     STATE.push_history()
     msg = delete_opening(opening)
@@ -1202,46 +1621,24 @@ def api_delete_opening(opening_id: str):
 
 # 调用火山引擎文生图API的函数
 def call_volcengine_image_api(params):
-    print(f"调用火山引擎文生图API，模型：{params.get('model')}")
-    print(f"提示词：{params.get('prompt')}")
-    headers = {
-        "Content-Type": "application/json",
-        "Authorization": f"Bearer {VOLCENGINE_API_KEY_IMAGE}"
+    """
+    无 API 部署版本：
+    不调用真实文生图接口，避免 API Key 泄露和部署失败。
+    """
+    return {
+        "disabled": True,
+        "message": "当前为无 API 部署版本，文生图功能未启用。"
     }
-    try:
-        response = requests.post(f"{VOLCENGINE_API_BASE}/images/generations", headers=headers, json=params)
-        print(f"API响应状态码：{response.status_code}")
-        print(f"API响应内容：{response.text}")
-        return response.json()
-    except Exception as e:
-        print(f"API调用失败：{str(e)}")
-        return {"error": str(e)}
+
 
 # 生成户型图
 def generate_floorplan(prompt):
-    # ===================== 关键修正 =====================
-    # 1. Seedream 是文生图模型，不是聊天模型！不能用 messages！
-    # 2. 直接返回图片URL，彻底弃用Base64
-    # ====================================================
+    """
+    无 API 部署版本：
+    保留接口，但不生成真实图片。
+    """
+    raise RuntimeError("当前为无 API 部署版本，AI参考图生成功能未启用。基础2D/3D装修功能可正常使用。")
 
-    # 文生图专用参数（火山引擎Seedream标准格式）
-    image_prompt = f"{prompt}"
-    params = {
-        "model": DOUBAO_SEEDREAM_MODEL,
-        "prompt": image_prompt,  # 文生图只用prompt，不是messages！
-        "size": "1920x1920",  # 至少3686400像素
-        "response_format": "url"  # 【关键】返回URL，不用Base64
-    }
-
-    # 调用火山引擎【文生图API】（和对话API分开，别混用）
-    result = call_volcengine_image_api(params)
-
-    # 提取图片URL（文生图标准返回格式）
-    if "data" in result and len(result["data"]) > 0:
-        image_url = result["data"][0]["url"]
-        return image_url  # 直接返回URL，干净！
-
-    raise Exception("AI生成户型图失败，未返回图片")
 
 # API接口：生成户型图
 
@@ -1266,19 +1663,19 @@ def api_generate_floorplan():
 # 2. 户型图解析功能
 # 3. 与现有导入接口的集成
 
-# 火山引擎API配置
-VOLCENGINE_API_KEY_CHAT = os.getenv("VOLCENGINE_API_KEY_CHAT") or os.getenv("ARK_API_KEY") or ""
-VOLCENGINE_API_KEY_IMAGE = os.getenv("VOLCENGINE_API_KEY_IMAGE") or os.getenv("ARK_API_KEY") or ""
+# 火山引擎API配置（无 API 部署版本）
+# 本文件不包含任何真实 API Key，适合上传 GitHub/Gitee 并部署到 Render。
+VOLCENGINE_API_KEY_CHAT = os.getenv("VOLCENGINE_API_KEY_CHAT", "")
+VOLCENGINE_API_KEY_IMAGE = os.getenv("VOLCENGINE_API_KEY_IMAGE", "")
 VOLCENGINE_API_BASE = os.getenv("VOLCENGINE_API_BASE", "https://ark.cn-beijing.volces.com/api/v3")
-
-# 这里填 Render 后台配置的模型接入点 ID（ep-开头）
 DOUBAO_SEED_MODEL = os.getenv("DOUBAO_SEED_MODEL", "")
-# 文生图模型接入点 ID
 DOUBAO_SEEDREAM_MODEL = os.getenv("DOUBAO_SEEDREAM_MODEL", "")
 
 # 读取外置的Prompt文件（自动处理换行、格式，永不报错！）
 def load_system_prompt():
     prompt_path = os.path.join(BASE_DIR, "system_prompt.txt")
+    if not os.path.exists(prompt_path):
+        return "无 API 部署版本：未启用外部AI解析。"
     with open(prompt_path, "r", encoding="utf-8") as f:
         return f.read()
 
@@ -1287,77 +1684,46 @@ system_prompt = load_system_prompt()
 
 # 调用火山引擎API的通用函数（添加日志）
 def call_volcengine_api(model, messages, temperature=0.7):
-    print(f"调用火山引擎API，模型：{model}")
-    print(f"消息：{messages}")
-    headers = {
-        "Content-Type": "application/json",
-        "Authorization": f"Bearer {VOLCENGINE_API_KEY_CHAT}"
+    """
+    无 API 部署版本：
+    不调用火山引擎接口。
+    """
+    return {
+        "disabled": True,
+        "message": "当前为无 API 部署版本，AI户型解析功能未启用。"
     }
-    payload = {
-        "model": model,
-        "messages": messages,
-        "temperature": temperature,
-        "response_format": {"type": "json_object"}
-    }
-    try:
-        response = requests.post(f"{VOLCENGINE_API_BASE}/chat/completions", headers=headers, json=payload)
-        print(f"API响应状态码：{response.status_code}")
-        print(f"API响应内容：{response.text}")
-        return response.json()
-    except Exception as e:
-        print(f"API调用失败：{str(e)}")
-        return {"error": str(e)}
+
 
 # ======================
 # 【已修复】解析户型图（支持Base64，无损还原）
 # ======================
 def parse_floorplan(image_base64):
-    messages = [
-        {
-            "role": "system",
-            "content": system_prompt
-            # "content": "你是一个专业的户型图解析助手，能够从户型图中提取房间布局、尺寸、门窗位置等信息，只返回标准JSON格式，不要多余文字 JSON格式必须包含以下字段：rooms（房间列表）、openings（门窗列表）、furnitures（家具列表） 其中rooms字段包含id、name、width、depth、x、y、height、wall_color、wall_material等属性；openings字段包含id、name、type、room_id、wall、offset、width、height、sill、color、material等
-        },
-        {
-            "role": "user",
-            "content": [
-                {
-                    "type": "text",
-                    # "text": "解析这张户型图，提取房间布局、尺寸、门窗位置和家具信息，返回标准JSON格式 "
-                    "text": "解析已经转换为base64的户型图，返回标准JSON格式，只输出JSON，不要多余文字 "
-                },
-                {
-                    "type": "image_url",
-                    "image_url": {
-                        "url": f"data:image/png;base64,{image_base64}"
-                    }
-                }
-            ]
-        }
-    ]
-    result = call_volcengine_api(DOUBAO_SEED_MODEL, messages)
-    
-    # 提取AI返回的内容
-    if 'choices' in result and len(result['choices']) > 0:
-        # 直接提取纯JSON内容
-        pure_json = result["choices"][0]["message"]["content"]
-        
-        # 转成字典直接用
-        try:
-            import json
-            data = json.loads(pure_json)
-            
-            # 写入tmp.json文件
-            tmp_json_path = os.path.join(BASE_DIR, 'tmp.json')
-            with open(tmp_json_path, 'w', encoding='utf-8') as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
-            
-            return data
-        except json.JSONDecodeError:
-            # 如果解析失败，返回原始内容
-            return {"error": "Failed to parse AI response as JSON", "content": pure_json}
-    
-    return result
+    """
+    无 API 部署版本：
+    不解析真实图片，返回一个安全的示例布局 JSON。
+    """
+    data = {
+        "rooms": [
+            {"id": "room_1", "name": "客厅", "x": 0, "y": 0, "width": 4.8, "depth": 4.0, "height": 3.0, "wall_color": "#ede6d8", "wall_material": "原木风"},
+            {"id": "room_2", "name": "卧室", "x": 0, "y": 4.2, "width": 3.8, "depth": 3.4, "height": 3.0, "wall_color": "#efe7da", "wall_material": "木纹"}
+        ],
+        "furnitures": [
+            {"id": "furniture_1", "type": "loungeSofa", "label": "沙发", "room_id": "room_1", "x": 0.5, "y": 0.6, "z": 0, "width": 1.8, "depth": 0.8, "height": 0.82, "rotation": 0, "color": "#6f7d8c", "material": "布艺"},
+            {"id": "furniture_2", "type": "bedDouble", "label": "双人床", "room_id": "room_2", "x": 0.5, "y": 4.6, "z": 0, "width": 2.0, "depth": 1.8, "height": 0.62, "rotation": 0, "color": "#d9d0c7", "material": "布艺"}
+        ],
+        "openings": [
+            {"id": "opening_1", "type": "door", "name": "客厅门", "room_id": "room_1", "wall": "left", "offset": 1.0, "width": 1.0, "height": 2.1, "sill": 0, "color": "#8b6a4d", "material": "木纹"}
+        ],
+        "message": "当前为无 API 部署版本，已返回示例布局。"
+    }
+    tmp_json_path = os.path.join(BASE_DIR, "tmp.json")
+    try:
+        with open(tmp_json_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+    except OSError:
+        pass
+    return data
+
 
 # ======================
 # 【已修复】API接口（接收Base64图片或URL）

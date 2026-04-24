@@ -1,0 +1,79 @@
+{
+  "rooms": [
+    {
+      "id": "room_1",
+      "name": "卧室",
+      "x": 0.0,
+      "y": 0.0,
+      "width": 0.0,
+      "depth": 0.0,
+      "height": 3.0,
+      "wall_color": "#f0efe9",
+      "wall_material": "白色瓷砖"
+    },
+    {
+      "id": "room_2",
+      "name": "饭厅",
+      "x": 0.0,
+      "y": 0.0,
+      "width": 0.0,
+      "depth": 0.0,
+      "height": 3.0,
+      "wall_color": "#f0efe9",
+      "wall_material": "白色瓷砖"
+    },
+    {
+      "id": "room_3",
+      "name": "卧室",
+      "x": 0.0,
+      "y": 0.0,
+      "width": 0.0,
+      "depth": 0.0,
+      "height": 3.0,
+      "wall_color": "#f0efe9",
+      "wall_material": "白色瓷砖"
+    }
+  ],
+  "openings": [
+    {
+      "id": "opening_1",
+      "type": "window",
+      "name": "卧室窗",
+      "room_id": "room_1",
+      "wall": "left",
+      "offset": 0.0,
+      "width": 0.0,
+      "height": 0.0,
+      "sill": 0.0,
+      "color": "#f5f5f5",
+      "material": "glass"
+    },
+    {
+      "id": "opening_2",
+      "type": "door",
+      "name": "卧室门",
+      "room_id": "room_1",
+      "wall": "right",
+      "offset": 0.0,
+      "width": 0.0,
+      "height": 0.0,
+      "sill": 0.0,
+      "color": "#c49a6c",
+      "material": "原木风"
+    },
+    {
+      "id": "opening_3",
+      "type": "door",
+      "name": "卧室门",
+      "room_id": "room_3",
+      "wall": "left",
+      "offset": 0.0,
+      "width": 0.0,
+      "height": 0.0,
+      "sill": 0.0,
+      "color": "#c49a6c",
+      "material": "原木风"
+    }
+  ],
+  "furnitures": []
+}
