@@ -1926,8 +1926,8 @@ def api_generate_floorplan():
 VOLCENGINE_API_KEY_CHAT = os.getenv("VOLCENGINE_API_KEY_CHAT", "")
 VOLCENGINE_API_KEY_IMAGE = os.getenv("VOLCENGINE_API_KEY_IMAGE", "")
 VOLCENGINE_API_BASE = os.getenv("VOLCENGINE_API_BASE", "https://ark.cn-beijing.volces.com/api/v3")
-DOUBAO_SEED_MODEL = os.getenv("DOUBAO_SEED_MODEL", "")  # 普通语言模型，用于语音/文本指令
-DOUBAO_SEEDREAM_MODEL = os.getenv("DOUBAO_SEEDREAM_MODEL", "")  # 视觉/文生图模型，用于 AI 生成户型图和应用户型解析
+DOUBAO_SEED_MODEL = os.getenv("DOUBAO_SEED_MODEL", "")  # 应用户型图/AI解析户型图模型 model ID
+DOUBAO_SEEDREAM_MODEL = os.getenv("DOUBAO_SEEDREAM_MODEL", "")  # AI生成户型图/文生图模型 model ID
 
 # 读取外置的Prompt文件（自动处理换行、格式，永不报错！）
 def load_system_prompt():
@@ -2023,7 +2023,7 @@ def call_volcengine_api(model, messages, temperature=0.2, max_tokens=2048, timeo
     except requests.Timeout:
         raise RuntimeError(
             f"火山方舟聊天/视觉模型调用超时（{safe_timeout}秒）。"
-            "请确认 DOUBAO_SEEDREAM_MODEL 是正确的视觉模型 model ID，或在 Render 启动命令中增加 gunicorn --timeout 180。"
+            "请确认当前调用的模型 model ID 正确，或在 Render 启动命令中增加 gunicorn --timeout 180。"
         )
     except requests.RequestException as e:
         raise RuntimeError(f"火山方舟聊天/视觉模型网络请求失败：{str(e)}")
@@ -2253,10 +2253,12 @@ def normalize_ai_floorplan_result(data):
 # 【已修复】解析户型图（支持Base64，无损还原）
 # ======================
 def parse_floorplan(image_base64):
-    model = os.getenv("DOUBAO_SEEDREAM_MODEL", "").strip()
+    # 应用户型图 / AI解析户型图：严格调用 DOUBAO_SEED_MODEL 的 model ID。
+    # 注意：这里不再使用 DOUBAO_SEEDREAM_MODEL，避免把文生图模型误用于解析。
+    model = os.getenv("DOUBAO_SEED_MODEL", "").strip()
 
     if not model:
-        raise RuntimeError("缺少环境变量 DOUBAO_SEEDREAM_MODEL，无法解析户型图。应用户型需要调用视觉模型的 model ID。")
+        raise RuntimeError("缺少环境变量 DOUBAO_SEED_MODEL，无法解析户型图。应用户型图需要调用 DOUBAO_SEED_MODEL 的 model ID。")
 
     # 压缩图片可以显著降低多模态调用耗时，避免 Render 线上 500/worker timeout。
     compact_image_base64 = compact_base64_image(image_base64, max_side=1280, quality=82)
@@ -2352,7 +2354,7 @@ def parse_floorplan(image_base64):
         messages=messages,
         temperature=0.1,
         max_tokens=4096,
-        prefer_image_key=True
+        prefer_image_key=False
     )
 
     content = (

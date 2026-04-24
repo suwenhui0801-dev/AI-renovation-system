@@ -1,332 +1,97 @@
-# 🏠 AI装修模拟小游戏（Web版）
+# AI 装修模拟系统（Web 版）
 
-一个基于 Web 的装修模拟系统，支持 2D / 3D 实时编辑，并结合 AI 实现语音控制、户型理解与参考图生成。
+这是一个基于 Flask + HTML/CSS/JavaScript + Three.js 的 AI 装修模拟系统，支持 2D 平面编辑、3D 视图预览、家具/房间/门窗编辑、语音输入、AI 生成户型参考图，以及根据户型图自动解析并应用到当前视图。
 
-👉 打开网页即可使用，无需安装。
+## 主要功能
 
-<<<<<<< HEAD
-***
+- 2D 平面户型编辑：支持房间、家具、门窗的添加、移动、删除和基础属性修改。
+- 3D 视图同步：根据 2D 数据实时渲染室内模型。
+- 普通语音输入：把语音识别文本整理成可执行的装修指令。
+- AI 生成户型图：根据文字需求生成户型参考图。
+- 应用户型图：读取上传或生成的户型图，解析为 rooms / furnitures / openings，并映射到 2D / 3D 视图。
+- 本地导入/导出配置：支持保存和恢复当前装修方案。
 
-# 🌐 在线体验
+## 本地运行
 
-👉 <https://ai-renovation-system.onrender.com>
+安装依赖：
 
-> 提示：首次打开可能有 10\~30 秒加载时间（服务器冷启动）
-
-***
-=======
----
-
-# 🌐 在线体验
-
-👉 https://ai-renovation-system.onrender.com
-
-> 提示：首次打开可能有 10~30 秒加载时间（服务器冷启动）
-
----
->>>>>>> 5eda8d71296547ccf2b063c8cb6806c9c48803cb
-
-# ✨ 项目亮点
-
-- 🧠 AI辅助设计：自然语言 → 户型解析 → 自动生成布局
-- 🎮 游戏化交互：像小游戏一样拖拽、摆放、修改家具
-- 🧭 双视图系统：2D 平面图 + 3D 俯视模型同步
-- 🎤 语音控制：通过语音直接完成设计操作
-- ✋ 手势识别：用手势抓取、移动、缩放家具
-
-<<<<<<< HEAD
-***
-=======
----
->>>>>>> 5eda8d71296547ccf2b063c8cb6806c9c48803cb
-
-# 🎮 如何使用
-
-## 基础操作
-
-<<<<<<< HEAD
-1. 创建房间：填写信息 → 点击新增
-2. 添加家具：选择家具 → 点击放置
-3. 编辑家具：点击家具 → 修改 / 删除
-4. 添加门窗：选择类型 → 放置墙面
-
-***
-=======
-1. 创建房间：填写信息 → 点击新增  
-2. 添加家具：选择家具 → 点击放置  
-3. 编辑家具：点击家具 → 修改 / 删除  
-4. 添加门窗：选择类型 → 放置墙面  
-
----
->>>>>>> 5eda8d71296547ccf2b063c8cb6806c9c48803cb
-
-## 🤖 AI 指令
-
-示例：
-
-<<<<<<< HEAD
-给客厅添加沙发\
-删除卧室的床\
-把沙发改成蓝色
-
-***
-=======
-给客厅添加沙发  
-删除卧室的床  
-把沙发改成蓝色  
-
----
->>>>>>> 5eda8d71296547ccf2b063c8cb6806c9c48803cb
-
-## 🎤 语音输入
-
-点击语音按钮，说出指令即可
-
-<<<<<<< HEAD
-***
-
-## ✋ 手势控制
-
-- 捏合 → 拖动家具
-- 双手缩放 → 改变大小
-- 👍 → 语音输入
-- ✌️ → 删除对象
-
-***
-
-# 🧱 技术架构
-
-前端（HTML + JS + Three.js）\
-↓\
-Flask 后端\
-↓\
-AI服务（火山方舟）
-
-***
-=======
----
-
-## ✋ 手势控制
-
-- 捏合 → 拖动家具  
-- 双手缩放 → 改变大小  
-- 👍 → 语音输入  
-- ✌️ → 删除对象  
-
----
-
-# 🧱 技术架构
-
-前端（HTML + JS + Three.js）  
-↓  
-Flask 后端  
-↓  
-AI服务（火山方舟）
-
----
->>>>>>> 5eda8d71296547ccf2b063c8cb6806c9c48803cb
-
-# 🚀 本地运行
-
-## 克隆项目
-
-<<<<<<< HEAD
-git clone <https://github.com/suwenhui0801-dev/AI-renovation-system.git>
-git clone <https://gitee.com/suu_1_0/AI-renovation-system.git>
-=======
-git clone https://github.com/suwenhui0801-dev/AI-renovation-system.git
-git clone https://gitee.com/suu_1_0/AI-renovation-system.git
->>>>>>> 5eda8d71296547ccf2b063c8cb6806c9c48803cb
-
-## 安装依赖
-
+```bash
 pip install -r requirements.txt
-
-## 配置环境变量
-
-Windows（cmd）：
-
-<<<<<<< HEAD
-set ARK\_API\_KEY=你的火山方舟Key
-set ARK\_MODEL=deepseek的模型ID
-set VOLCENGINE\_API\_KEY\_CHAT=你的Key
-set VOLCENGINE\_API\_KEY\_IMAGE=你的Key
-set VOLCENGINE\_API\_BASE=<https://ark.cn-beijing.volces.com/api/v3>
-set DOUBAO\_SEED\_MODEL=你的模型ID
-set DOUBAO\_SEEDREAM\_MODEL=你的模型ID
-
-## 启动
-
-python app.py
-
-访问：<http://localhost:5000>
-
-***
-
-# ☁️ 部署（Render）
-
-Build Command:\
-pip install -r requirements.txt
-
-Start Command:\
-gunicorn app:app
-
-***
-
-# 📁 项目结构
-
-renovation\_game/\
-├── pic/            # 图片资源
-├── static/         # 静态资源
-│   ├── models/     # 3D模型文件
-│   ├── app.js      # 前端逻辑
-│   └── style.css   # 前端样式
-├── templates/      # HTML模板
-│   └── index.html  # 主页面
-├── app.py          # 主应用
-├── main.py         # 辅助脚本
-├── requirements.txt # 依赖项
-├── system\_prompt.txt # AI系统提示
-├── tmp.json        # 临时数据
-└── README.md       # 项目说明
-
-***
-
-# 📦 可用设备
-
-## 卧室家具
-
-- 床（单人床、双人床、双层床）
-- 衣柜
-- 床头柜
-- 书架
-- 书桌
-
-## 客厅家具
-
-- 沙发（多种样式）
-- 单人椅
-- 茶几
-- 边柜
-- 电视柜
-
-## 餐厅家具
-
-- 餐桌
-- 餐椅
-
-## 厨房设备
-
-- 橱柜
-- 台面
-- 冰箱
-- 水槽
-
-## 浴室设备
-
-- 马桶
-- 浴缸
-- 洗手台
-- 淋浴
-
-## 其他设备
-
-- 落地灯（圆形、方形）
-- 壁灯
-- 洗衣机
-- 烘干机
-- 衣帽架
-- 植物
-- 地毯
-
-***
-
-# ⚠️ 注意事项
-
-- 需要 API Key 才能使用 AI
-- Render 免费版会休眠
-- 手势识别需要摄像头
-
-***
-
-=======
-set ARK_API_KEY=你的火山方舟Key
-set ARK_MODEL=deepseek的模型ID
-set VOLCENGINE_API_KEY_CHAT=你的Key
-set VOLCENGINE_API_KEY_IMAGE=你的Key
-set VOLCENGINE_API_BASE=https://ark.cn-beijing.volces.com/api/v3
-set DOUBAO_SEED_MODEL=你的模型ID
-set DOUBAO_SEEDREAM_MODEL=你的模型ID 
-
-## 启动
-
-python app.py  
-
-访问：http://localhost:5000
-
----
-
-# ☁️ 部署（Render）
-
-Build Command:  
-pip install -r requirements.txt  
-
-Start Command:  
-gunicorn app:app  
-
----
-
-# 📁 项目结构
-
-renovation_game/  
-├── pic/
-├── static/  
-├── templates/  
-├── app.py  
-├── main.py
-├── requirements.txt  
-├── system_prompt.txt
-├── tmp.json
-└── README.md  
-
-
----
-
-# ⚠️ 注意事项
-
-- 需要 API Key 才能使用 AI  
-- Render 免费版会休眠  
-- 手势识别需要摄像头  
-
----
-
->>>>>>> 5eda8d71296547ccf2b063c8cb6806c9c48803cb
-
----
-
-## AI 模型环境变量说明（最新版）
-
-本项目不再是无 API 版本。Render 中需要配置以下环境变量：
-
-```text
-ARK_API_KEY=你的普通语言模型 Key
-ARK_MODEL=deepseek-v3-2-251201
-DOUBAO_SEED_MODEL=普通语言模型 model ID
-DOUBAO_SEEDREAM_MODEL=视觉/文生图模型 model ID
-VOLCENGINE_API_KEY_CHAT=聊天/解析 Key
-VOLCENGINE_API_KEY_IMAGE=文生图/视觉 Key
-VOLCENGINE_API_BASE=https://ark.cn-beijing.volces.com/api/v3
-VOLCENGINE_TIMEOUT=120
 ```
 
-当前模型调用关系：
+启动项目：
 
-- `AI生成户型图`：调用 `DOUBAO_SEEDREAM_MODEL`。
-- `应用户型 / AI解析户型图`：调用 `DOUBAO_SEEDREAM_MODEL`。
-- `DOUBAO_SEED_MODEL`：只作为普通语言模型配置保留，不用于户型图视觉解析。
+```bash
+python app.py
+```
 
-Render 推荐 Start Command：
+浏览器访问：
+
+```text
+http://localhost:5000
+```
+
+## Render 部署
+
+推荐 Start Command：
 
 ```bash
 gunicorn app:app --workers 1 --threads 4 --timeout 180 --graceful-timeout 30 --bind 0.0.0.0:$PORT
 ```
+
+Build Command：
+
+```bash
+pip install -r requirements.txt
+```
+
+## AI 模型环境变量
+
+本项目调用火山方舟模型时，全部使用环境变量里的 **model ID 字符串**，不要填写模型中文名称。
+
+```text
+ARK_API_KEY=你的普通语音输入模型 Key
+ARK_MODEL=普通语音输入模型 model ID
+
+VOLCENGINE_API_KEY_CHAT=聊天/解析 Key
+VOLCENGINE_API_KEY_IMAGE=文生图 Key
+VOLCENGINE_API_BASE=https://ark.cn-beijing.volces.com/api/v3
+VOLCENGINE_TIMEOUT=120
+
+DOUBAO_SEED_MODEL=应用户型图/AI解析户型图模型 model ID
+DOUBAO_SEEDREAM_MODEL=AI生成户型图/文生图模型 model ID
+```
+
+## 当前模型调用关系
+
+| 功能 | 使用的环境变量 | 调用方式 |
+|---|---|---|
+| 普通语音输入 | `ARK_MODEL` | `/chat/completions` |
+| AI 生成户型图 | `DOUBAO_SEEDREAM_MODEL` | `/images/generations` |
+| 应用户型图 / AI 解析户型图 | `DOUBAO_SEED_MODEL` | `/chat/completions` |
+
+说明：
+
+- `ARK_MODEL` 只负责普通语音输入指令标准化。
+- `DOUBAO_SEEDREAM_MODEL` 只负责 AI 生成户型参考图。
+- `DOUBAO_SEED_MODEL` 负责应用户型图，也就是把户型图片解析成项目可用的 JSON 布局数据。
+
+## 关键代码位置
+
+- `app.py`
+  - `normalize_voice_command_with_llm()`：普通语音输入，读取 `ARK_MODEL`
+  - `call_volcengine_image_api()`：AI 生成户型图，读取 `DOUBAO_SEEDREAM_MODEL`
+  - `parse_floorplan()`：应用户型图 / AI 解析户型图，读取 `DOUBAO_SEED_MODEL`
+- `static/app.js`
+  - 调用 `/api/ai/generate_floorplan`
+  - 调用 `/api/ai/parse_floorplan`
+- `templates/index.html`
+  - 页面结构与按钮区域
+- `static/style.css`
+  - 页面样式与按钮样式
+
+## 注意事项
+
+1. Render 环境变量必须填写 model ID，不要填写模型名称。
+2. 如果应用户型图超时，可以把 `VOLCENGINE_TIMEOUT` 设置为 `120` 或更高，并使用上面的 gunicorn timeout 启动命令。
+3. 项目压缩包中不包含真实 API Key，部署时需要在 Render 的 Environment 中手动配置。
