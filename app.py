@@ -1989,7 +1989,7 @@ def call_volcengine_api(model, messages, temperature=0.2, max_tokens=2048):
         raise RuntimeError("缺少环境变量 VOLCENGINE_API_KEY_CHAT 或 ARK_API_KEY")
 
     if not model:
-        raise RuntimeError("缺少模型环境变量 DOUBAO_SEED_MODEL")
+        raise RuntimeError("缺少模型参数 model")
 
     url = f"{base_url}/chat/completions"
 
@@ -2176,18 +2176,13 @@ def normalize_ai_floorplan_result(data):
 # 【已修复】解析户型图（支持Base64，无损还原）
 # ======================
 def parse_floorplan(image_base64):
-    """
-    调用多模态模型解析户型图，返回可直接导入系统的 rooms / furnitures / openings JSON。
-    """
     model = os.getenv("DOUBAO_SEED_MODEL", "").strip()
 
     if not model:
         raise RuntimeError("缺少环境变量 DOUBAO_SEED_MODEL，无法解析户型图。")
 
     prompt = """
-你是一个室内装修系统的户型图解析器。请根据用户上传或生成的户型图，输出严格 JSON。
-
-必须只输出 JSON，不要 Markdown，不要解释文字。
+你是一个室内装修系统的户型图解析器。请根据图片内容输出严格 JSON，不要 Markdown，不要解释文字。
 
 输出格式必须为：
 {
@@ -2239,43 +2234,15 @@ def parse_floorplan(image_base64):
   "message": "解析成功"
 }
 
-坐标规则：
-1. 使用米作为单位。
-2. x 表示水平位置，y 表示平面纵深位置。
-3. 每个房间必须有 x、y、width、depth、height。
+规则：
+1. 单位使用米。
+2. x 表示水平坐标，y 表示平面纵深坐标。
+3. 房间必须包含 id、name、x、y、width、depth、height。
 4. 默认墙高 height 为 3.0。
-5. 如果图片无法精准识别尺寸，请根据常见户型合理估算。
-6. 房间之间不要严重重叠。
-7. room_id 必须引用 rooms 中真实存在的 id。
-
-家具 type 只能从下面选择：
-bedSingle, bedDouble, bedBunk, cabinetBed, cabinetBedDrawerTable,
-coatRackStanding, coatRack,
-stoolBarSquare, stoolBar, chairRounded, chairModernCushion, chairCushion,
-benchCushion, loungeSofaLong, loungeSofa, loungeDesignSofaCorner,
-loungeDesignSofa, loungeDesignChair, loungeChairRelax, loungeChair,
-tableRound, table, tableGlass, tableCoffeeGlass, tableCoffee,
-televisionVintage, televisionModern, cabinetTelevisionDoors, cabinetTelevision,
-rugRounded, rugRound, rugRectangle, rugDoormat,
-kitchenSink, kitchenFridgeSmall, kitchenFridgeLarge, kitchenCabinetDrawer,
-kitchenCabinet, kitchenBar,
-toilet, showerRound, shower, bathtub, bathroomSink, bathroomMirror,
-bathroomCabinet,
-desk, chairDesk, bookcaseOpenLow, bookcaseClosedWide, bookcaseClosedDoors,
-lampWall, lampSquareFloor, lampRoundFloor,
-pottedPlant, plantSmall3, plantSmall2, plantSmall1,
-washer, dryer, trashcan
-
-墙面对象规则：
-1. 如果是 bathroomMirror、lampWall、televisionModern、televisionVintage，可以设置 placement 为 "wall"。
-2. 墙面对象需要 wall、wall_offset、mount_height。
-3. wall 只能是 top、right、bottom、left。
-4. mount_height 默认 1.5。
-
-门窗规则：
-1. door 的 sill 为 0。
-2. window 的 sill 通常为 0.9。
-3. wall 只能是 top、right、bottom、left。
+5. 如果无法精准识别尺寸，请合理估算。
+6. room_id 必须引用 rooms 中存在的 id。
+7. furniture type 必须尽量使用项目已有类型，例如 bedSingle、bedDouble、bedBunk、loungeSofa、table、desk、chairDesk、toilet、bathtub、bathroomSink、kitchenSink、kitchenFridgeLarge、bathroomMirror、lampWall、televisionModern。
+8. 墙面对象可以使用 placement: "wall"，并补充 wall、wall_offset、mount_height。
 """
 
     messages = [
@@ -2317,14 +2284,6 @@ washer, dryer, trashcan
         raise RuntimeError(f"模型没有返回可解析内容：{str(result)[:500]}")
 
     data = extract_json_object(content)
-
-    tmp_json_path = os.path.join(BASE_DIR, "tmp.json")
-    try:
-        with open(tmp_json_path, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-    except OSError:
-        pass
-
     return normalize_ai_floorplan_result(data)
 
 
@@ -2360,6 +2319,8 @@ def api_parse_floorplan():
         try:
             result = parse_floorplan(image_base64)
         except Exception as e:
+            import traceback
+            traceback.print_exc()
             return jsonify({
                 "ok": False,
                 "message": f"AI解析户型图失败：{str(e)}"
