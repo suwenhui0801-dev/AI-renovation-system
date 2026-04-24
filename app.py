@@ -36,7 +36,7 @@ os.makedirs(GENERATED_FLOORPLAN_DIR, exist_ok=True)
 # 3) 保留旧的 DEEPSEEK_* 环境变量兼容，方便从上一个版本平滑迁移
 ARK_API_KEY = os.getenv("ARK_API_KEY", "")
 ARK_MODEL = os.getenv("ARK_MODEL", "deepseek-v3-2-251201")
-ARK_MODEL_LABEL = "本地规则模式"
+ARK_MODEL_LABEL = ARK_MODEL
 ARK_API_URL = os.getenv("ARK_API_URL", "")
 
 
@@ -1271,8 +1271,8 @@ def detect_furniture_type(text: str) -> Optional[str]:
 
 def call_ark_chat_json(system_prompt: str, user_prompt: str, max_tokens: int = 260) -> Dict:
     """
-    无 API 部署版本：
-    不调用火山方舟/DeepSeek，只做本地安全兜底。
+    本地规则模式：
+    不调用外部API，使用本地规则处理指令。
     """
     command = user_prompt
     if "语音转文字结果：" in command:
@@ -1280,21 +1280,64 @@ def call_ark_chat_json(system_prompt: str, user_prompt: str, max_tokens: int = 2
     command = command.strip()
     return {
         "command": command,
-        "reason": "无 API 部署版本，已直接使用本地识别文本作为指令。",
+        "reason": "使用本地规则处理指令。",
         "confidence": "medium"
     }
 
 
 def normalize_voice_command_with_llm(transcript: str) -> Dict:
-    """
-    无 API 部署版本：
-    语音转文字结果不再交给大模型纠错，而是直接作为本地指令执行。
-    """
     transcript = (transcript or "").strip()
+    if not transcript:
+        return {
+            "command": "",
+            "reason": "没有识别到语音文本。",
+            "confidence": "low"
+        }
+
+    model = os.getenv("ARK_MODEL", "deepseek-v3-2-251201").strip()
+
+    system_prompt = """
+你是装修编辑器的语音指令标准化助手。
+把用户口语化语音转成系统可以执行的简洁中文指令。
+
+只输出 JSON：
+{
+  "command": "给客厅添加双人床",
+  "reason": "用户想在客厅放置双人床",
+  "confidence": "high"
+}
+
+要求：
+1. 不要解释。
+2. 不要输出 Markdown。
+3. command 必须是中文短句。
+4. 如果无法判断，command 为空字符串。
+"""
+
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": f"语音转文字结果：{transcript}"}
+    ]
+
+    result = call_volcengine_api(
+        model=model,
+        messages=messages,
+        temperature=0.1,
+        max_tokens=512
+    )
+
+    content = (
+        result.get("choices", [{}])[0]
+        .get("message", {})
+        .get("content", "")
+    )
+
+    data = extract_json_object(content)
+
     return {
-        "command": transcript,
-        "reason": "无 API 部署版本，使用本地规则直接执行语音文本。",
-        "confidence": "medium" if transcript else "low"
+        "command": str(data.get("command", "")).strip(),
+        "reason": str(data.get("reason", "")).strip(),
+        "confidence": str(data.get("confidence", "medium")).strip()
     }
 
 
@@ -1877,7 +1920,7 @@ def api_generate_floorplan():
 # 2. 户型图解析功能
 # 3. 与现有导入接口的集成
 
-# 火山引擎API配置（无 API 部署版本）
+# 火山引擎API配置
 # 本文件不包含任何真实 API Key，适合上传 GitHub/Gitee 并部署到 Render。
 VOLCENGINE_API_KEY_CHAT = os.getenv("VOLCENGINE_API_KEY_CHAT", "")
 VOLCENGINE_API_KEY_IMAGE = os.getenv("VOLCENGINE_API_KEY_IMAGE", "")
@@ -1889,7 +1932,7 @@ DOUBAO_SEEDREAM_MODEL = os.getenv("DOUBAO_SEEDREAM_MODEL", "")
 def load_system_prompt():
     prompt_path = os.path.join(BASE_DIR, "system_prompt.txt")
     if not os.path.exists(prompt_path):
-        return "无 API 部署版本：未启用外部AI解析。"
+        return "你是装修系统的 AI 助手，请严格按要求输出 JSON。"
     with open(prompt_path, "r", encoding="utf-8") as f:
         return f.read()
 
@@ -1897,15 +1940,80 @@ def load_system_prompt():
 system_prompt = load_system_prompt()
 
 # 调用火山引擎API的通用函数（添加日志）
-def call_volcengine_api(model, messages, temperature=0.7):
+def extract_json_object(content):
     """
-    无 API 部署版本：
-    不调用火山引擎接口。
+    从模型返回内容中提取 JSON 对象。
+    支持：
+    1. 纯 JSON
+    2. ```json ... ``` 包裹
+    3. 前后带少量解释文字
     """
-    return {
-        "disabled": True,
-        "message": "当前为无 API 部署版本，AI户型解析功能未启用。"
+    if isinstance(content, dict):
+        return content
+
+    text = str(content or "").strip()
+
+    if text.startswith("```"):
+        text = re.sub(r"^```(?:json)?", "", text, flags=re.IGNORECASE).strip()
+        text = re.sub(r"```$", "", text).strip()
+
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
+
+    start = text.find("{")
+    end = text.rfind("}")
+
+    if start == -1 or end == -1 or end <= start:
+        raise RuntimeError(f"模型返回内容中没有 JSON 对象：{text[:500]}")
+
+    json_text = text[start:end + 1]
+
+    try:
+        return json.loads(json_text)
+    except json.JSONDecodeError as e:
+        raise RuntimeError(f"模型返回 JSON 解析失败：{e}；原始内容：{text[:500]}")
+
+def call_volcengine_api(model, messages, temperature=0.2, max_tokens=2048):
+    api_key = (
+        os.getenv("VOLCENGINE_API_KEY_CHAT", "").strip()
+        or os.getenv("ARK_API_KEY", "").strip()
+    )
+    base_url = os.getenv(
+        "VOLCENGINE_API_BASE",
+        "https://ark.cn-beijing.volces.com/api/v3"
+    ).rstrip("/")
+
+    if not api_key:
+        raise RuntimeError("缺少环境变量 VOLCENGINE_API_KEY_CHAT 或 ARK_API_KEY")
+
+    if not model:
+        raise RuntimeError("缺少模型环境变量 DOUBAO_SEED_MODEL")
+
+    url = f"{base_url}/chat/completions"
+
+    payload = {
+        "model": model,
+        "messages": messages,
+        "temperature": temperature,
+        "max_tokens": max_tokens,
+        "response_format": {"type": "json_object"}
     }
+
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json"
+    }
+
+    response = requests.post(url, headers=headers, json=payload, timeout=120)
+
+    if response.status_code >= 400:
+        raise RuntimeError(
+            f"火山方舟聊天/视觉模型调用失败：{response.status_code} {response.text[:800]}"
+        )
+
+    return response.json()
 
 
 def image_url_to_base64(image_url):
@@ -2070,29 +2178,154 @@ def normalize_ai_floorplan_result(data):
 # ======================
 def parse_floorplan(image_base64):
     """
-    无 API 部署版本：
-    不解析真实图片，返回一个安全的示例布局 JSON。
+    调用多模态模型解析户型图，返回可直接导入系统的 rooms / furnitures / openings JSON。
     """
-    data = {
-        "rooms": [
-            {"id": "room_1", "name": "客厅", "x": 0, "y": 0, "width": 4.8, "depth": 4.0, "height": 3.0, "wall_color": "#ede6d8", "wall_material": "原木风"},
-            {"id": "room_2", "name": "卧室", "x": 0, "y": 4.2, "width": 3.8, "depth": 3.4, "height": 3.0, "wall_color": "#efe7da", "wall_material": "木纹"}
-        ],
-        "furnitures": [
-            {"id": "furniture_1", "type": "loungeSofa", "label": "沙发", "room_id": "room_1", "x": 0.5, "y": 0.6, "z": 0, "width": 1.8, "depth": 0.8, "height": 0.82, "rotation": 0, "color": "#6f7d8c", "material": "布艺"},
-            {"id": "furniture_2", "type": "bedDouble", "label": "双人床", "room_id": "room_2", "x": 0.5, "y": 4.6, "z": 0, "width": 2.0, "depth": 1.8, "height": 0.62, "rotation": 0, "color": "#d9d0c7", "material": "布艺"}
-        ],
-        "openings": [
-            {"id": "opening_1", "type": "door", "name": "客厅门", "room_id": "room_1", "wall": "left", "offset": 1.0, "width": 1.0, "height": 2.1, "sill": 0, "color": "#8b6a4d", "material": "木纹"}
-        ],
-        "message": "当前为无 API 部署版本，已返回示例布局。"
+    model = os.getenv("DOUBAO_SEED_MODEL", "").strip()
+
+    if not model:
+        raise RuntimeError("缺少环境变量 DOUBAO_SEED_MODEL，无法解析户型图。")
+
+    prompt = """
+你是一个室内装修系统的户型图解析器。请根据用户上传或生成的户型图，输出严格 JSON。
+
+必须只输出 JSON，不要 Markdown，不要解释文字。
+
+输出格式必须为：
+{
+  "rooms": [
+    {
+      "id": "room_1",
+      "name": "客厅",
+      "x": 0,
+      "y": 0,
+      "width": 4.8,
+      "depth": 4.0,
+      "height": 3.0,
+      "wall_color": "#f0efe9"
     }
+  ],
+  "furnitures": [
+    {
+      "id": "furniture_1",
+      "type": "loungeSofa",
+      "label": "沙发",
+      "room_id": "room_1",
+      "x": 0.5,
+      "y": 0.5,
+      "z": 0,
+      "width": 1.8,
+      "depth": 0.8,
+      "height": 0.8,
+      "rotation": 0,
+      "color": "#6f7d8c",
+      "material": "布艺",
+      "placement": "floor"
+    }
+  ],
+  "openings": [
+    {
+      "id": "opening_1",
+      "type": "door",
+      "name": "门",
+      "room_id": "room_1",
+      "wall": "left",
+      "offset": 1.0,
+      "width": 0.9,
+      "height": 2.1,
+      "sill": 0,
+      "color": "#8b6a4d",
+      "material": "木纹"
+    }
+  ],
+  "message": "解析成功"
+}
+
+坐标规则：
+1. 使用米作为单位。
+2. x 表示水平位置，y 表示平面纵深位置。
+3. 每个房间必须有 x、y、width、depth、height。
+4. 默认墙高 height 为 3.0。
+5. 如果图片无法精准识别尺寸，请根据常见户型合理估算。
+6. 房间之间不要严重重叠。
+7. room_id 必须引用 rooms 中真实存在的 id。
+
+家具 type 只能从下面选择：
+bedSingle, bedDouble, bedBunk, cabinetBed, cabinetBedDrawerTable,
+coatRackStanding, coatRack,
+stoolBarSquare, stoolBar, chairRounded, chairModernCushion, chairCushion,
+benchCushion, loungeSofaLong, loungeSofa, loungeDesignSofaCorner,
+loungeDesignSofa, loungeDesignChair, loungeChairRelax, loungeChair,
+tableRound, table, tableGlass, tableCoffeeGlass, tableCoffee,
+televisionVintage, televisionModern, cabinetTelevisionDoors, cabinetTelevision,
+rugRounded, rugRound, rugRectangle, rugDoormat,
+kitchenSink, kitchenFridgeSmall, kitchenFridgeLarge, kitchenCabinetDrawer,
+kitchenCabinet, kitchenBar,
+toilet, showerRound, shower, bathtub, bathroomSink, bathroomMirror,
+bathroomCabinet,
+desk, chairDesk, bookcaseOpenLow, bookcaseClosedWide, bookcaseClosedDoors,
+lampWall, lampSquareFloor, lampRoundFloor,
+pottedPlant, plantSmall3, plantSmall2, plantSmall1,
+washer, dryer, trashcan
+
+墙面对象规则：
+1. 如果是 bathroomMirror、lampWall、televisionModern、televisionVintage，可以设置 placement 为 "wall"。
+2. 墙面对象需要 wall、wall_offset、mount_height。
+3. wall 只能是 top、right、bottom、left。
+4. mount_height 默认 1.5。
+
+门窗规则：
+1. door 的 sill 为 0。
+2. window 的 sill 通常为 0.9。
+3. wall 只能是 top、right、bottom、left。
+"""
+
+    messages = [
+        {
+            "role": "system",
+            "content": "你是一个只输出 JSON 的户型图解析模型。"
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": prompt
+                },
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": f"data:image/png;base64,{image_base64}"
+                    }
+                }
+            ]
+        }
+    ]
+
+    result = call_volcengine_api(
+        model=model,
+        messages=messages,
+        temperature=0.1,
+        max_tokens=4096
+    )
+
+    content = (
+        result.get("choices", [{}])[0]
+        .get("message", {})
+        .get("content", "")
+    )
+
+    if not content:
+        raise RuntimeError(f"模型没有返回可解析内容：{str(result)[:500]}")
+
+    data = extract_json_object(content)
+
     tmp_json_path = os.path.join(BASE_DIR, "tmp.json")
     try:
         with open(tmp_json_path, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
     except OSError:
         pass
+
     return normalize_ai_floorplan_result(data)
 
 

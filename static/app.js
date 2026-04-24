@@ -3799,10 +3799,39 @@ function initAIFloorplanModule() {
         body: JSON.stringify({ prompt: prompt })
       });
 
-      const result = await response.json();
+      console.log('API响应状态:', response.status);
+
+      const responseText = await response.text();
+      let result;
+
+      try {
+        result = JSON.parse(responseText);
+      } catch (e) {
+        console.error('解析接口返回的不是JSON:', responseText.slice(0, 500));
+        throw new Error(`解析接口返回异常，HTTP ${response.status}`);
+      }
+
+      console.log('API响应结果:', result);
       if (result.ok) {
-        const generateResult = result.result;
-        el.floorplanPreview.innerHTML = `<img src="${generateResult}" alt="生成的户型图" style="max-width: 100%; max-height: 100%; object-fit: contain;">`;
+        const imageUrl =
+          result.image_url ||
+          result.result?.image_url ||
+          result.result?.url ||
+          result.result;
+
+        if (!imageUrl || typeof imageUrl !== 'string') {
+          throw new Error('后端没有返回有效的户型图图片地址');
+        }
+
+        el.floorplanPreview.innerHTML = `
+          <img
+            src="${imageUrl}"
+            alt="生成的户型图"
+            class="floorplan-preview-img"
+            onload="this.classList.add('loaded')"
+            onerror="this.parentElement.innerHTML='<div class=&quot;floorplan-placeholder&quot;>图片加载失败，请重新生成</div>'"
+          >
+        `;
         el.floorplanStatusText.textContent = '户型图生成成功！';
         setMessage('户型图生成成功', 'success');
       } else {
