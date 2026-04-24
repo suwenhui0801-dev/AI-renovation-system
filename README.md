@@ -301,3 +301,32 @@ renovation_game/
 ---
 
 >>>>>>> 5eda8d71296547ccf2b063c8cb6806c9c48803cb
+
+---
+
+## AI 模型环境变量说明（最新版）
+
+本项目不再是无 API 版本。Render 中需要配置以下环境变量：
+
+```text
+ARK_API_KEY=你的普通语言模型 Key
+ARK_MODEL=deepseek-v3-2-251201
+DOUBAO_SEED_MODEL=普通语言模型 model ID
+DOUBAO_SEEDREAM_MODEL=视觉/文生图模型 model ID
+VOLCENGINE_API_KEY_CHAT=聊天/解析 Key
+VOLCENGINE_API_KEY_IMAGE=文生图/视觉 Key
+VOLCENGINE_API_BASE=https://ark.cn-beijing.volces.com/api/v3
+VOLCENGINE_TIMEOUT=120
+```
+
+当前模型调用关系：
+
+- `AI生成户型图`：调用 `DOUBAO_SEEDREAM_MODEL`。
+- `应用户型 / AI解析户型图`：调用 `DOUBAO_SEEDREAM_MODEL`。
+- `DOUBAO_SEED_MODEL`：只作为普通语言模型配置保留，不用于户型图视觉解析。
+
+Render 推荐 Start Command：
+
+```bash
+gunicorn app:app --workers 1 --threads 4 --timeout 180 --graceful-timeout 30 --bind 0.0.0.0:$PORT
+```

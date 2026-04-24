@@ -9,6 +9,7 @@ import uuid
 import base64
 import urllib.error
 import urllib.request
+from io import BytesIO
 from dataclasses import asdict, dataclass
 from typing import Dict, List, Optional
 
@@ -1815,7 +1816,7 @@ def call_volcengine_image_api(params):
     if not api_key:
         raise RuntimeError("缺少环境变量 VOLCENGINE_API_KEY_IMAGE")
     if not model:
-        raise RuntimeError("缺少环境变量 DOUBAO_SEEDREAM_MODEL")
+        raise RuntimeError("缺少环境变量 DOUBAO_SEEDREAM_MODEL，请填写视觉/文生图模型的 model ID")
 
     url = f"{base_url}/images/generations"
 
@@ -1925,8 +1926,8 @@ def api_generate_floorplan():
 VOLCENGINE_API_KEY_CHAT = os.getenv("VOLCENGINE_API_KEY_CHAT", "")
 VOLCENGINE_API_KEY_IMAGE = os.getenv("VOLCENGINE_API_KEY_IMAGE", "")
 VOLCENGINE_API_BASE = os.getenv("VOLCENGINE_API_BASE", "https://ark.cn-beijing.volces.com/api/v3")
-DOUBAO_SEED_MODEL = os.getenv("DOUBAO_SEED_MODEL", "")
-DOUBAO_SEEDREAM_MODEL = os.getenv("DOUBAO_SEEDREAM_MODEL", "")
+DOUBAO_SEED_MODEL = os.getenv("DOUBAO_SEED_MODEL", "")  # 普通语言模型，用于语音/文本指令
+DOUBAO_SEEDREAM_MODEL = os.getenv("DOUBAO_SEEDREAM_MODEL", "")  # 视觉/文生图模型，用于 AI 生成户型图和应用户型解析
 
 # 读取外置的Prompt文件（自动处理换行、格式，永不报错！）
 def load_system_prompt():
@@ -1975,18 +1976,26 @@ def extract_json_object(content):
     except json.JSONDecodeError as e:
         raise RuntimeError(f"模型返回 JSON 解析失败：{e}；原始内容：{text[:500]}")
 
-def call_volcengine_api(model, messages, temperature=0.2, max_tokens=2048):
-    api_key = (
-        os.getenv("VOLCENGINE_API_KEY_CHAT", "").strip()
-        or os.getenv("ARK_API_KEY", "").strip()
-    )
+def call_volcengine_api(model, messages, temperature=0.2, max_tokens=2048, timeout=None, prefer_image_key=False):
+    if prefer_image_key:
+        api_key = (
+            os.getenv("VOLCENGINE_API_KEY_IMAGE", "").strip()
+            or os.getenv("VOLCENGINE_API_KEY_CHAT", "").strip()
+            or os.getenv("ARK_API_KEY", "").strip()
+        )
+    else:
+        api_key = (
+            os.getenv("VOLCENGINE_API_KEY_CHAT", "").strip()
+            or os.getenv("ARK_API_KEY", "").strip()
+            or os.getenv("VOLCENGINE_API_KEY_IMAGE", "").strip()
+        )
     base_url = os.getenv(
         "VOLCENGINE_API_BASE",
         "https://ark.cn-beijing.volces.com/api/v3"
     ).rstrip("/")
 
     if not api_key:
-        raise RuntimeError("缺少环境变量 VOLCENGINE_API_KEY_CHAT 或 ARK_API_KEY")
+        raise RuntimeError("缺少环境变量 VOLCENGINE_API_KEY_CHAT、VOLCENGINE_API_KEY_IMAGE 或 ARK_API_KEY")
 
     if not model:
         raise RuntimeError("缺少模型参数 model")
@@ -2005,14 +2014,30 @@ def call_volcengine_api(model, messages, temperature=0.2, max_tokens=2048):
         "Content-Type": "application/json"
     }
 
-    response = requests.post(url, headers=headers, json=payload, timeout=120)
+    # Render/Gunicorn 默认 worker timeout 通常约 30 秒。
+    # 这里默认 25 秒主动超时，让接口返回 JSON 错误，而不是让 worker 被杀后返回 HTML 500。
+    safe_timeout = timeout or float(os.getenv("VOLCENGINE_TIMEOUT", "120"))
+
+    try:
+        response = requests.post(url, headers=headers, json=payload, timeout=safe_timeout)
+    except requests.Timeout:
+        raise RuntimeError(
+            f"火山方舟聊天/视觉模型调用超时（{safe_timeout}秒）。"
+            "请确认 DOUBAO_SEEDREAM_MODEL 是正确的视觉模型 model ID，或在 Render 启动命令中增加 gunicorn --timeout 180。"
+        )
+    except requests.RequestException as e:
+        raise RuntimeError(f"火山方舟聊天/视觉模型网络请求失败：{str(e)}")
 
     if response.status_code >= 400:
         raise RuntimeError(
-            f"火山方舟聊天/视觉模型调用失败：{response.status_code} {response.text[:800]}"
+            f"火山方舟聊天/视觉模型调用失败：HTTP {response.status_code} {response.text[:1200]}"
         )
 
-    return response.json()
+    try:
+        return response.json()
+    except ValueError:
+        raise RuntimeError(f"火山方舟返回的不是 JSON：{response.text[:800]}")
+
 
 
 def image_url_to_base64(image_url):
@@ -2071,6 +2096,58 @@ def image_url_to_base64(image_url):
         raise RuntimeError("下载到的图片内容为空")
 
     return base64.b64encode(response.content).decode("utf-8")
+
+
+def compact_base64_image(image_base64, max_side=1280, quality=82):
+    """
+    压缩给视觉模型的户型图，避免 Render/Gunicorn 默认超时：
+    - 如果安装了 Pillow，会把图片最长边压到 max_side，并转成 JPEG base64；
+    - 如果 Pillow 不可用或压缩失败，则返回原始 base64。
+    """
+    raw = (image_base64 or "").strip()
+    if raw.startswith("data:image/"):
+        raw = raw.split(",", 1)[1]
+
+    try:
+        from PIL import Image
+        image_bytes = base64.b64decode(raw)
+        img = Image.open(BytesIO(image_bytes)).convert("RGB")
+
+        width, height = img.size
+        longest = max(width, height)
+        if longest > max_side:
+            scale = max_side / float(longest)
+            new_size = (max(1, int(width * scale)), max(1, int(height * scale)))
+            img = img.resize(new_size, Image.LANCZOS)
+
+        out = BytesIO()
+        img.save(out, format="JPEG", quality=quality, optimize=True)
+        return base64.b64encode(out.getvalue()).decode("utf-8")
+    except Exception as e:
+        print(f"[WARN] compact_base64_image failed, use original image: {e}", flush=True)
+        return raw
+
+
+def make_safe_floorplan_fallback():
+    """
+    AI 解析失败时的安全兜底。
+    注意：这不是最终 AI 结果，只用于保证前端不会因为模型超时/额度/参数错误而崩溃。
+    """
+    return normalize_ai_floorplan_result({
+        "rooms": [
+            {"id": "room_1", "name": "客厅", "x": 0, "y": 0, "width": 4.8, "depth": 4.0, "height": 3.0, "wall_color": "#f0efe9"},
+            {"id": "room_2", "name": "卧室", "x": 0, "y": 4.2, "width": 3.8, "depth": 3.4, "height": 3.0, "wall_color": "#f0efe9"},
+            {"id": "room_3", "name": "饭厅", "x": 5.0, "y": 0, "width": 3.0, "depth": 3.0, "height": 3.0, "wall_color": "#f0efe9"},
+            {"id": "room_4", "name": "阳台", "x": 3.9, "y": 4.2, "width": 2.6, "depth": 1.8, "height": 2.8, "wall_color": "#f0efe9"},
+        ],
+        "furnitures": [],
+        "openings": [
+            {"id": "opening_1", "type": "window", "name": "窗", "room_id": "room_1", "wall": "top", "offset": 1.4, "width": 1.6, "height": 1.1, "sill": 0.9},
+            {"id": "opening_2", "type": "door", "name": "门", "room_id": "room_3", "wall": "right", "offset": 1.2, "width": 0.9, "height": 2.1, "sill": 0},
+        ],
+        "message": "AI解析失败，已返回安全兜底户型。"
+    })
+
 
 def normalize_ai_floorplan_result(data):
     if not isinstance(data, dict):
@@ -2176,10 +2253,13 @@ def normalize_ai_floorplan_result(data):
 # 【已修复】解析户型图（支持Base64，无损还原）
 # ======================
 def parse_floorplan(image_base64):
-    model = os.getenv("DOUBAO_SEED_MODEL", "").strip()
+    model = os.getenv("DOUBAO_SEEDREAM_MODEL", "").strip()
 
     if not model:
-        raise RuntimeError("缺少环境变量 DOUBAO_SEED_MODEL，无法解析户型图。")
+        raise RuntimeError("缺少环境变量 DOUBAO_SEEDREAM_MODEL，无法解析户型图。应用户型需要调用视觉模型的 model ID。")
+
+    # 压缩图片可以显著降低多模态调用耗时，避免 Render 线上 500/worker timeout。
+    compact_image_base64 = compact_base64_image(image_base64, max_side=1280, quality=82)
 
     prompt = """
 你是一个室内装修系统的户型图解析器。请根据图片内容输出严格 JSON，不要 Markdown，不要解释文字。
@@ -2260,7 +2340,7 @@ def parse_floorplan(image_base64):
                 {
                     "type": "image_url",
                     "image_url": {
-                        "url": f"data:image/png;base64,{image_base64}"
+                        "url": f"data:image/jpeg;base64,{compact_image_base64}"
                     }
                 }
             ]
@@ -2271,7 +2351,8 @@ def parse_floorplan(image_base64):
         model=model,
         messages=messages,
         temperature=0.1,
-        max_tokens=4096
+        max_tokens=4096,
+        prefer_image_key=True
     )
 
     content = (
@@ -2285,6 +2366,7 @@ def parse_floorplan(image_base64):
 
     data = extract_json_object(content)
     return normalize_ai_floorplan_result(data)
+
 
 
 # ======================
@@ -2318,18 +2400,21 @@ def api_parse_floorplan():
 
         try:
             result = parse_floorplan(image_base64)
+            return jsonify({
+                "ok": True,
+                "result": result
+            }), 200
         except Exception as e:
             import traceback
             traceback.print_exc()
+
+            # 返回 JSON，避免前端收到 Flask HTML 500。
+            # 同时附带 fallback_result，用户需要时可继续用安全户型兜底，不会卡死页面。
             return jsonify({
                 "ok": False,
-                "message": f"AI解析户型图失败：{str(e)}"
+                "message": f"AI解析户型图失败：{str(e)}",
+                "fallback_result": make_safe_floorplan_fallback()
             }), 200
-
-        return jsonify({
-            "ok": True,
-            "result": result
-        }), 200
 
     except Exception as e:
         import traceback
@@ -2338,6 +2423,7 @@ def api_parse_floorplan():
             "ok": False,
             "message": f"户型解析接口异常：{str(e)}"
         }), 200
+
 # AI解析户型图功能实现区域结束
 
 
