@@ -120,6 +120,85 @@ const drag = {
 
 let mouseDown = false;
 
+
+// AI户型图上传/解析前压缩配置。
+// 目的：减少 Base64 体积，降低多模态模型调用耗时，避免 Render 连接超时或 ERR_CONNECTION_CLOSED。
+const FLOORPLAN_COMPRESS_MAX_SIDE = 1024;
+const FLOORPLAN_COMPRESS_QUALITY = 0.75;
+
+function estimateDataUrlKB(dataUrl) {
+  if (!dataUrl || typeof dataUrl !== 'string') return 0;
+  return Math.round(dataUrl.length / 1024);
+}
+
+function loadImageForCanvas(source) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error('图片加载失败，无法压缩'));
+
+    // data:image 不需要 CORS；普通 URL 尽量启用 anonymous，便于同源/允许跨域图片压缩。
+    if (typeof source === 'string' && !source.startsWith('data:image/')) {
+      img.crossOrigin = 'anonymous';
+    }
+    img.src = source;
+  });
+}
+
+async function fileToDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = event => resolve(event.target.result);
+    reader.onerror = () => reject(new Error('读取图片文件失败'));
+    reader.readAsDataURL(file);
+  });
+}
+
+async function compressFloorplanImageToDataUrl(source, maxSide = FLOORPLAN_COMPRESS_MAX_SIDE, quality = FLOORPLAN_COMPRESS_QUALITY) {
+  let sourceDataUrl = source;
+
+  if (source instanceof File || source instanceof Blob) {
+    sourceDataUrl = await fileToDataUrl(source);
+  }
+
+  const img = await loadImageForCanvas(sourceDataUrl);
+  const originalWidth = img.naturalWidth || img.width;
+  const originalHeight = img.naturalHeight || img.height;
+
+  if (!originalWidth || !originalHeight) {
+    throw new Error('图片尺寸读取失败，无法压缩');
+  }
+
+  const scale = Math.min(1, maxSide / Math.max(originalWidth, originalHeight));
+  const targetWidth = Math.max(1, Math.round(originalWidth * scale));
+  const targetHeight = Math.max(1, Math.round(originalHeight * scale));
+
+  const canvas = document.createElement('canvas');
+  canvas.width = targetWidth;
+  canvas.height = targetHeight;
+
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, targetWidth, targetHeight);
+  ctx.drawImage(img, 0, 0, targetWidth, targetHeight);
+
+  const compressedDataUrl = canvas.toDataURL('image/jpeg', quality);
+  return {
+    dataUrl: compressedDataUrl,
+    originalKB: estimateDataUrlKB(sourceDataUrl),
+    compressedKB: estimateDataUrlKB(compressedDataUrl),
+    originalWidth,
+    originalHeight,
+    targetWidth,
+    targetHeight,
+  };
+}
+
+function splitBase64FromDataUrl(dataUrl) {
+  if (!dataUrl || typeof dataUrl !== 'string') return '';
+  return dataUrl.includes(',') ? dataUrl.split(',', 2)[1] : dataUrl;
+}
+
 const previewState = {
   hoverPlacement: null,
   snapLines: [],
@@ -3845,28 +3924,27 @@ function initAIFloorplanModule() {
     }
   });
 
-  // 上传户型图
+  // 上传户型图：上传后先压缩，再放入预览区，后续“应用户型”会直接使用压缩后的图片。
   el.uploadFloorplanBtn.addEventListener('click', () => {
     const input = document.createElement('input');
     input.type = 'file';
     input.accept = 'image/*';
-    input.onchange = (e) => {
+    input.onchange = async (e) => {
       const file = e.target.files[0];
       if (file) {
         try {
-          // 使用FileReader预览本地图片
-          const reader = new FileReader();
-          reader.onload = (event) => {
-            // 显示图片，设置样式确保适应预览区不拉伸
-            el.floorplanPreview.innerHTML = `<img src="${event.target.result}" alt="上传的户型图" style="max-width: 100%; max-height: 100%; object-fit: contain;">`;
-            el.floorplanStatusText.textContent = '户型图已上传成功！';
-            setMessage('户型图上传成功', 'success');
-          };
-          reader.readAsDataURL(file);
+          el.floorplanStatusText.textContent = '正在压缩户型图...';
+          const compressed = await compressFloorplanImageToDataUrl(file);
+
+          // 显示压缩后的图片，设置样式确保适应预览区不拉伸。
+          el.floorplanPreview.innerHTML = `<img src="${compressed.dataUrl}" alt="上传的户型图" style="max-width: 100%; max-height: 100%; object-fit: contain;">`;
+          el.floorplanStatusText.textContent = '户型图已上传并压缩成功！';
+          setMessage(`户型图上传成功，已压缩为约 ${compressed.compressedKB}KB`, 'success');
+          console.log('户型图上传压缩完成:', compressed);
         } catch (error) {
           console.error('上传户型图失败:', error);
           el.floorplanStatusText.textContent = '上传失败，请重试';
-          setMessage('户型图上传失败', 'error');
+          setMessage(`户型图上传失败：${error?.message || '未知错误'}`, 'error');
         }
       }
     };
@@ -3914,13 +3992,22 @@ function initAIFloorplanModule() {
       let image_url = '';
       
       if (imageUrl.startsWith('data:image/')) {
-        // 本地上传的图片，提取Base64
-        console.log('本地图片，提取Base64');
-        image_base64 = imageUrl.split(',')[1];
+        // 本地上传的图片：发送前再做一次兜底压缩，避免预览区被旧数据或未压缩数据污染。
+        console.log('本地图片，发送前兜底压缩Base64');
+        const compressed = await compressFloorplanImageToDataUrl(imageUrl);
+        image_base64 = splitBase64FromDataUrl(compressed.dataUrl);
+        console.log('发送给解析接口的图片大小约:', compressed.compressedKB, 'KB', compressed);
       } else {
-        // 网络图片（AI生成），直接传URL
-        console.log('网络图片，传递URL');
-        image_url = imageUrl;
+        // 网络图片（AI生成）：优先在前端拉取并压缩成Base64；若跨域或压缩失败，则回退为URL交给后端处理。
+        console.log('网络图片，尝试发送前兜底压缩');
+        try {
+          const compressed = await compressFloorplanImageToDataUrl(imageUrl);
+          image_base64 = splitBase64FromDataUrl(compressed.dataUrl);
+          console.log('网络户型图已压缩为Base64，大小约:', compressed.compressedKB, 'KB', compressed);
+        } catch (compressError) {
+          console.warn('网络图片前端压缩失败，回退为URL传给后端:', compressError);
+          image_url = imageUrl;
+        }
       }
       
       // 调用后端API解析户型图
