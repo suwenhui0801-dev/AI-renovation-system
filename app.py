@@ -1103,7 +1103,7 @@ def delete_furniture(item: Furniture) -> str:
 def update_room(room: Room, payload: Dict) -> tuple[bool, str]:
     old = asdict(room)
 
-    for key in ["name", "x", "y", "width", "depth", "height", "wall_color", "floor_color"]:
+    for key in ["name", "x", "y", "width", "depth", "height", "wall_color", "floor_color", "wall_material"]:
         if key not in payload:
             continue
         value = payload[key]
@@ -1113,7 +1113,7 @@ def update_room(room: Room, payload: Dict) -> tuple[bool, str]:
 
     room.width = clamp(room.width, 1.6, float('inf'))
     room.depth = clamp(room.depth, 1.6, float('inf'))
-    room.height = clamp(room.height, 2.2, 6.0)
+    room.height = max(0.1, room.height)
 
     for item in STATE.furnitures:
         if item.room_id == room.id:
@@ -1201,7 +1201,7 @@ def add_room(
 ) -> tuple[bool, str, Optional[Room]]:
     width = clamp(width, 1.6, 12.0)
     depth = clamp(depth, 1.6, 12.0)
-    height = clamp(height, 2.2, 6.0)
+    height = max(0.1, float(height))
     room_x, room_y = find_available_room_position(width, depth, x, y)
     room_name = name or ROOM_TYPE_OPTIONS[min(len(STATE.rooms), len(ROOM_TYPE_OPTIONS) - 1)]
     room = Room(next_id("room", STATE.rooms), room_name, room_x, room_y, width, depth, height=height, wall_color=wall_color, floor_color=floor_color, wall_material=wall_material)
@@ -1216,9 +1216,20 @@ def add_room(
     return True, f"已添加{room.name}。", room
 
 
-def add_opening(room: Room, opening_type: str, wall: str, offset: float, width: float, name: Optional[str] = None) -> tuple[bool, str, Optional[Opening]]:
+def add_opening(
+    room: Room,
+    opening_type: str,
+    wall: str,
+    offset: float,
+    width: float,
+    name: Optional[str] = None,
+    height: Optional[float] = None,
+    sill: Optional[float] = None,
+    color: Optional[str] = None,
+    material: Optional[str] = None,
+) -> tuple[bool, str, Optional[Opening]]:
     if opening_type not in OPENING_TYPE_LABELS or wall not in WALLS:
-        return False, "门窗参数不正确。", None
+        return False, "Invalid opening parameters.", None
 
     same_type_count = len([o for o in STATE.openings if o.type == opening_type and o.room_id == room.id]) + 1
     opening = Opening(
@@ -1229,15 +1240,15 @@ def add_opening(room: Room, opening_type: str, wall: str, offset: float, width: 
         wall=wall,
         offset=float(offset),
         width=float(width),
-        height=1.5 if opening_type == "window" else 2.1,
-        sill=0.9 if opening_type == "window" else 0.0,
-        color="#79bdf8" if opening_type == "window" else "#8b6a4d",
-        material="玻璃" if opening_type == "window" else "木纹",
+        height=float(height if height is not None else (1.5 if opening_type == "window" else 2.1)),
+        sill=float(sill if sill is not None else (0.9 if opening_type == "window" else 0.0)),
+        color=color or ("#79bdf8" if opening_type == "window" else "#8b6a4d"),
+        material=material or ("glass" if opening_type == "window" else "wood"),
     )
 
     clamp_opening(opening)
     STATE.openings.append(opening)
-    return True, f"已为{room.name}添加{OPENING_TYPE_LABELS[opening_type]}。", opening
+    return True, f"Added {OPENING_TYPE_LABELS[opening_type]} to {room.name}.", opening
 
 
 def update_opening(opening: Opening, payload: Dict) -> tuple[bool, str]:
@@ -1254,13 +1265,15 @@ def update_opening(opening: Opening, payload: Dict) -> tuple[bool, str]:
         opening.color = "#79bdf8" if opening.type == "window" else "#8b6a4d"
         opening.material = "玻璃" if opening.type == "window" else "木纹"
 
-    for key in ["name", "offset", "width"]:
+    for key in ["name", "offset", "width", "height", "sill", "color", "material"]:
         if key in payload:
             value = payload[key]
-            if key in {"offset", "width"}:
+            if key in {"offset", "width", "height", "sill"}:
                 value = float(value)
             setattr(opening, key, value)
 
+    opening.height = max(0.2, float(opening.height))
+    opening.sill = max(0.0, float(opening.sill))
     clamp_opening(opening)
     return True, f"已更新{opening.name or OPENING_TYPE_LABELS[opening.type]}。"
 
@@ -1298,17 +1311,17 @@ def detect_furniture_type(text: str) -> Optional[str]:
 
 def call_ark_chat_json(system_prompt: str, user_prompt: str, max_tokens: int = 260) -> Dict:
     """
-    本地规则模式：
-    不调用外部API，使用本地规则处理指令。
+    Local rule mode: do not call external APIs, just pass through a normalized command.
     """
     command = user_prompt
-    if "语音转文字结果：" in command:
-        command = command.split("语音转文字结果：", 1)[-1]
+    transcript_prefix = "语音转文字结果："
+    if transcript_prefix in command:
+        command = command.split(transcript_prefix, 1)[-1]
     command = command.strip()
     return {
         "command": command,
-        "reason": "使用本地规则处理指令。",
-        "confidence": "medium"
+        "reason": "Handled by local normalization rules.",
+        "confidence": "medium",
     }
 
 
@@ -1317,62 +1330,60 @@ def normalize_voice_command_with_llm(transcript: str) -> Dict:
     if not transcript:
         return {
             "command": "",
-            "reason": "没有识别到语音文本。",
-            "confidence": "low"
+            "reason": "No transcript detected.",
+            "confidence": "low",
         }
 
-    model = get_model_id("ARK_MODEL", "普通语音输入指令标准化")
-    validate_model_binding("ARK_MODEL", model, "普通语音输入指令标准化")
+    return call_ark_chat_json("", f"语音转文字结果：{transcript}")
 
-    system_prompt = """
-你是装修编辑器的语音指令标准化助手。
-把用户口语化语音转成系统可以执行的简洁中文指令。
 
-只输出 JSON：
-{
-  "command": "给客厅添加双人床",
-  "reason": "用户想在客厅放置双人床",
-  "confidence": "high"
-}
+def detect_opening(text: str, room: Optional[Room] = None, opening_type: Optional[str] = None) -> Optional[Opening]:
+    candidates = STATE.openings
+    if room:
+        candidates = [item for item in candidates if item.room_id == room.id]
+    if opening_type:
+        candidates = [item for item in candidates if item.type == opening_type]
 
-要求：
-1. 不要解释。
-2. 不要输出 Markdown。
-3. command 必须是中文短句。
-4. 如果无法判断，command 为空字符串。
-"""
+    for opening in candidates:
+        if opening.name and opening.name in text:
+            return opening
 
-    messages = [
-        {"role": "system", "content": system_prompt},
-        {"role": "user", "content": f"语音转文字结果：{transcript}"}
-    ]
+    if opening_type == "window" or "窗" in text:
+        return next((item for item in candidates if item.type == "window"), None)
+    if opening_type == "door" or "门" in text:
+        return next((item for item in candidates if item.type == "door"), None)
+    return candidates[0] if candidates else None
 
-    result = call_volcengine_api(
-        model=model,
-        messages=messages,
-        temperature=0.1,
-        max_tokens=512
-    )
 
-    content = (
-        result.get("choices", [{}])[0]
-        .get("message", {})
-        .get("content", "")
-    )
-
-    data = extract_json_object(content)
-
-    return {
-        "command": str(data.get("command", "")).strip(),
-        "reason": str(data.get("reason", "")).strip(),
-        "confidence": str(data.get("confidence", "medium")).strip()
-    }
+def detect_client_action(text: str) -> Optional[Dict[str, str]]:
+    normalized = (text or "").strip().lower()
+    if not normalized:
+        return None
+    if "第一人称" in normalized and any(token in normalized for token in ["进入", "切换", "开启"]):
+        return {"type": "enter_first_person"}
+    if "第一人称" in normalized and any(token in normalized for token in ["退出", "关闭"]):
+        return {"type": "exit_first_person"}
+    if any(token in normalized for token in ["切换2d", "切到2d", "二维", "俯视"]):
+        return {"type": "show_2d"}
+    if any(token in normalized for token in ["切换3d", "切到3d", "三维", "立体"]):
+        return {"type": "show_3d"}
+    return None
 
 
 def apply_command(text: str) -> str:
     text = text.strip()
     if not text:
-        return "请输入指令。"
+        return "Please enter a command."
+
+    action = detect_client_action(text)
+    if action:
+        action_messages = {
+            "enter_first_person": "Entered first-person view.",
+            "exit_first_person": "Exited first-person view.",
+            "show_2d": "Switched to 2D view.",
+            "show_3d": "Switched to 3D view.",
+        }
+        return action_messages.get(action["type"], "View updated.")
 
     if "撤销" in text:
         return STATE.undo()
@@ -1381,11 +1392,11 @@ def apply_command(text: str) -> str:
 
     if "网格" in text and any(w in text for w in ["显示", "开启"]):
         STATE.show_grid = True
-        return "已显示网格。"
+        return "Grid shown."
 
     if "网格" in text and any(w in text for w in ["隐藏", "关闭"]):
         STATE.show_grid = False
-        return "已隐藏网格。"
+        return "Grid hidden."
 
     room = detect_room(text)
     ftype = detect_furniture_type(text)
@@ -1395,7 +1406,7 @@ def apply_command(text: str) -> str:
         width = parse_distance(text, 3.0)
         all_nums = re.findall(r"(\d+(?:\.\d+)?)\s*米", text)
         depth = float(all_nums[1]) if len(all_nums) > 1 else width
-        ok, msg, _ = add_room(f"房间{len(STATE.rooms)+1}", 0.5 + len(STATE.rooms) * 0.6, 0.5 + len(STATE.rooms) * 0.6, width, depth)
+        ok, msg, _ = add_room(f"room{len(STATE.rooms)+1}", 0.5 + len(STATE.rooms) * 0.6, 0.5 + len(STATE.rooms) * 0.6, width, depth)
         return msg if ok else msg
 
     if room and ("添加门" in text or "添加窗" in text):
@@ -1414,58 +1425,89 @@ def apply_command(text: str) -> str:
         ok, msg, _ = add_furniture(room, ftype, color=color)
         return msg if ok else msg
 
-    if room and any(w in text for w in ["宽度", "进深", "深度"]):
+    if room and any(w in text for w in ["宽度", "进深", "深度", "高度", "墙高", "墙面", "地面", "地板", "地砖", "材质"]):
         width_m = re.search(r"宽度(?:改为|到|至)?\s*(\d+(?:\.\d+)?)\s*米", text)
         depth_m = re.search(r"(?:进深|深度)(?:改为|到|至)?\s*(\d+(?:\.\d+)?)\s*米", text)
+        height_m = re.search(r"(?:墙高|房间高度|高度)(?:改为|到|至)?\s*(\d+(?:\.\d+)?)\s*米", text)
         payload = {}
         if width_m:
             payload["width"] = float(width_m.group(1))
         if depth_m:
             payload["depth"] = float(depth_m.group(1))
+        if height_m:
+            payload["height"] = float(height_m.group(1))
         if color:
             if any(w in text for w in ["地面", "地板", "地砖", "地毯"]):
                 payload["floor_color"] = color
             else:
                 payload["wall_color"] = color
+        if "材质" in text:
+            material_map = {
+                "瓷砖": "tile",
+                "乳胶漆": "paint",
+                "木": "wood",
+                "护墙板": "wall_panel",
+                "混凝土": "concrete",
+                "石材": "stone",
+            }
+            for keyword, material_name in material_map.items():
+                if keyword in text:
+                    payload["wall_material"] = material_name
+                    break
         if payload:
             ok, msg = update_room(room, payload)
             return msg if ok else msg
 
+    opening_type = "window" if "窗" in text else ("door" if "门" in text else None)
+    opening = detect_opening(text, room=room, opening_type=opening_type)
+    if opening and any(w in text for w in ["高度", "窗台", "窗宽", "宽度", "颜色", "材质"]):
+        payload = {}
+        height_m = re.search(r"(?:窗户?|门)?高度(?:改为|到|至)?\s*(\d+(?:\.\d+)?)\s*米", text)
+        sill_m = re.search(r"(?:窗台高度|窗台)(?:改为|到|至)?\s*(\d+(?:\.\d+)?)\s*米", text)
+        width_m = re.search(r"(?:窗宽|门宽|宽度)(?:改为|到|至)?\s*(\d+(?:\.\d+)?)\s*米", text)
+        if height_m:
+            payload["height"] = float(height_m.group(1))
+        if sill_m:
+            payload["sill"] = float(sill_m.group(1))
+        if width_m:
+            payload["width"] = float(width_m.group(1))
+        if color:
+            payload["color"] = color
+        if "玻璃" in text:
+            payload["material"] = "glass"
+        elif "木" in text:
+            payload["material"] = "wood"
+        elif "铝" in text:
+            payload["material"] = "aluminum"
+        if payload:
+            ok, msg = update_opening(opening, payload)
+            return msg if ok else msg
+
     if ftype and any(w in text for w in ["删除", "移除"]):
         if room:
-            # 删除指定房间的家具
             item = next((f for f in STATE.furnitures if f.type == ftype and f.room_id == room.id), None)
             if item:
                 return delete_furniture(item)
-            else:
-                return f"{room.name}的{ftype}不存在。"
-        else:
-            # 没有指定房间，保持原有逻辑
-            item = next((f for f in STATE.furnitures if f.type == ftype), None)
-            if item:
-                return delete_furniture(item)
-            else:
-                return f"{ftype}不存在。"
+            return f"{room.name} has no {ftype}."
+        item = next((f for f in STATE.furnitures if f.type == ftype), None)
+        if item:
+            return delete_furniture(item)
+        return f"{ftype} not found."
 
     if ftype and color:
         if room:
-            # 修改指定房间的家具颜色
             item = next((f for f in STATE.furnitures if f.type == ftype and f.room_id == room.id), None)
             if item:
                 ok, msg = update_furniture(item, {"color": color})
                 return msg if ok else msg
-            else:
-                return f"{room.name}的{ftype}不存在。"
-        else:
-            # 没有指定房间，保持原有逻辑
-            item = next((f for f in STATE.furnitures if f.type == ftype), None)
-            if item:
-                ok, msg = update_furniture(item, {"color": color})
-                return msg if ok else msg
-            else:
-                return f"{ftype}不存在。"
+            return f"{room.name} has no {ftype}."
+        item = next((f for f in STATE.furnitures if f.type == ftype), None)
+        if item:
+            ok, msg = update_furniture(item, {"color": color})
+            return msg if ok else msg
+        return f"{ftype} not found."
 
-    return "暂未识别该指令。可尝试：给客厅添加沙发、给客厅左墙添加门、给卧室添加窗、添加房间、删除客厅的沙发。"
+    return "Command not recognized. Try entering first-person view, switching to 2D, changing room height, or updating a window height."
 
 
 @app.route("/")
@@ -1484,12 +1526,12 @@ def api_voice_command():
     payload = request.get_json(silent=True) or {}
     transcript = str(payload.get("transcript", "")).strip()
     if not transcript:
-        return jsonify({"ok": False, "message": "未接收到语音转文字内容。", "state": STATE.to_dict()}), 400
+        return jsonify({"ok": False, "message": "No transcript received.", "state": STATE.to_dict()}), 400
 
     try:
         llm_result = normalize_voice_command_with_llm(transcript)
     except Exception as exc:
-        msg = f"{ARK_MODEL_LABEL} 指令解析失败：{exc}"
+        msg = f"{ARK_MODEL_LABEL} command parsing failed: {exc}"
         STATE.message = msg
         return jsonify({
             "ok": False,
@@ -1503,7 +1545,7 @@ def api_voice_command():
     llm_confidence = str(llm_result.get("confidence", "")).strip() or "unknown"
 
     if not normalized_command:
-        msg = f"语音已识别，但 {ARK_MODEL_LABEL} 暂未判断出可执行指令。{(' 原因：' + llm_reason) if llm_reason else ''}"
+        msg = f"Transcript recognized, but {ARK_MODEL_LABEL} did not return an executable command.{(' Reason: ' + llm_reason) if llm_reason else ''}"
         STATE.message = msg
         return jsonify({
             "ok": False,
@@ -1514,6 +1556,7 @@ def api_voice_command():
             "state": STATE.to_dict(),
         })
 
+    action = detect_client_action(normalized_command)
     if "撤销" not in normalized_command and "重做" not in normalized_command and "恢复" not in normalized_command:
         STATE.push_history()
 
@@ -1525,19 +1568,23 @@ def api_voice_command():
         "llm_command": normalized_command,
         "llm_reason": llm_reason,
         "llm_confidence": llm_confidence,
+        "action": action,
         "state": STATE.to_dict(),
     })
-
 
 
 @app.route("/api/command", methods=["POST"])
 def api_command():
     payload = request.get_json(silent=True) or {}
     text = str(payload.get("command", "")).strip()
+    action = detect_client_action(text)
     if text and ("撤销" not in text and "重做" not in text and "恢复" not in text):
         STATE.push_history()
     STATE.message = apply_command(text)
-    return jsonify(STATE.to_dict())
+    return jsonify({
+        **STATE.to_dict(),
+        "action": action,
+    })
 
 
 @app.route("/api/undo", methods=["POST"])
@@ -1577,7 +1624,7 @@ def api_import():
                     y=room_data.get("y", 0),
                     width=room_data.get("width", 3),
                     depth=room_data.get("depth", 3),
-                    height=clamp(float(room_data.get("height", 3.0)), 2.2, 6.0),
+                    height=max(0.1, float(room_data.get("height", 3.0))),
                     wall_color=room_data.get("wall_color", "#f0efe9"),
                     floor_color=room_data.get("floor_color", "#d8d0bd"),
                     wall_material=room_data.get("wall_material", "白色瓷砖")
@@ -1766,6 +1813,10 @@ def api_add_opening():
         float(payload.get("offset", 0.3)),
         float(payload.get("width", 0.9)),
         payload.get("name"),
+        payload.get("height"),
+        payload.get("sill"),
+        payload.get("color"),
+        payload.get("material"),
     )
     STATE.message = msg
     return jsonify({"ok": ok, "message": msg, "opening": asdict(opening) if opening else None, "state": STATE.to_dict()})
@@ -2138,7 +2189,7 @@ def image_url_to_base64(image_url):
     return base64.b64encode(response.content).decode("utf-8")
 
 
-def compact_base64_image(image_base64, max_side=1280, quality=82):
+def compact_base64_image(image_base64, max_side=1024, quality=78):
     """
     压缩给视觉模型的户型图，避免 Render/Gunicorn 默认超时：
     - 如果安装了 Pillow，会把图片最长边压到 max_side，并转成 JPEG base64；
@@ -2231,7 +2282,7 @@ def normalize_ai_floorplan_result(data):
             "y": float(room.get("y") or 0),
             "width": max(1.0, float(room.get("width") or 3)),
             "depth": max(1.0, float(room.get("depth") or 3)),
-            "height": clamp(float(room.get("height") or 3), 2.2, 6.0),
+            "height": max(0.1, float(room.get("height") or 3)),
             "wall_color": room.get("wall_color") or "#f0efe9",
             "floor_color": room.get("floor_color") or "#d8d0bd",
             "wall_material": room.get("wall_material") or "白色瓷砖",
@@ -2300,73 +2351,33 @@ def parse_floorplan(image_base64):
     validate_model_binding("DOUBAO_SEED_MODEL", model, "应用户型图/AI解析户型图")
 
     # 压缩图片可以显著降低多模态调用耗时，避免 Render 线上 500/worker timeout。
-    compact_image_base64 = compact_base64_image(image_base64, max_side=1280, quality=82)
+    compact_image_base64 = compact_base64_image(image_base64, max_side=1024, quality=78)
 
     prompt = """
-你是一个室内装修系统的户型图解析器。请根据图片内容输出严格 JSON，不要 Markdown，不要解释文字。
+You are a floorplan parser for an interior renovation app. Return JSON only.
+Do not output markdown or explanations.
 
-输出格式必须为：
+Keep the result compact and practical.
+Priority: room layout and dimensions > doors/windows > wall/floor colors and wall material > major furniture.
+Ignore tiny decorative objects. If uncertain, return a reasonable estimate instead of overthinking.
+
+Output schema:
 {
-  "rooms": [
-    {
-      "id": "room_1",
-      "name": "客厅",
-      "x": 0,
-      "y": 0,
-      "width": 4.8,
-      "depth": 4.0,
-      "height": 3.0,
-      "wall_color": "#f0efe9",
-      "floor_color": "#d8d0bd"
-    }
-  ],
-  "furnitures": [
-    {
-      "id": "furniture_1",
-      "type": "loungeSofa",
-      "label": "沙发",
-      "room_id": "room_1",
-      "x": 0.5,
-      "y": 0.5,
-      "z": 0,
-      "width": 1.8,
-      "depth": 0.8,
-      "height": 0.8,
-      "rotation": 0,
-      "color": "#6f7d8c",
-      "material": "布艺",
-      "placement": "floor"
-    }
-  ],
-  "openings": [
-    {
-      "id": "opening_1",
-      "type": "door",
-      "name": "门",
-      "room_id": "room_1",
-      "wall": "left",
-      "offset": 1.0,
-      "width": 0.9,
-      "height": 2.1,
-      "sill": 0,
-      "color": "#8b6a4d",
-      "material": "木纹"
-    }
-  ],
-  "message": "解析成功"
+  "rooms": [{"id":"room_1","name":"living room","x":0,"y":0,"width":4.8,"depth":4.0,"height":3.0,"wall_color":"#f0efe9","floor_color":"#d8d0bd","wall_material":"paint"}],
+  "openings": [{"id":"opening_1","type":"window","name":"window","room_id":"room_1","wall":"top","offset":1.0,"width":1.5,"height":1.5,"sill":0.9,"color":"#79bdf8","material":"glass"}],
+  "furnitures": [{"id":"furniture_1","type":"loungeSofa","label":"sofa","room_id":"room_1","x":0.5,"y":0.5,"z":0,"width":1.8,"depth":0.8,"height":0.8,"rotation":0,"color":"#6f7d8c","material":"fabric","placement":"floor"}],
+  "message": "parsed"
 }
 
-规则：
-1. 单位使用米。
-2. x 表示水平坐标，y 表示平面纵深坐标。
-3. 房间必须包含 id、name、x、y、width、depth、height。
-4. 默认墙高 height 为 3.0。
-5. 如果无法精准识别尺寸，请合理估算。
-6. room_id 必须引用 rooms 中存在的 id。
-7. furniture type 必须尽量使用项目已有类型，例如 bedSingle、bedDouble、bedBunk、loungeSofa、table、desk、chairDesk、toilet、bathtub、bathroomSink、kitchenSink、kitchenFridgeLarge、bathroomMirror、lampWall、televisionModern。
-8. 墙面对象可以使用 placement: "wall"，并补充 wall、wall_offset、mount_height。
+Rules:
+1. Use meters.
+2. room_id must reference an existing room id.
+3. wall must be one of top, right, bottom, left.
+4. Every room must include id, name, x, y, width, depth, height.
+5. If wall or floor colors are visible, output the closest hex colors.
+6. If wall material is visible, output a short wall_material string.
+7. Keep only major furniture items.
 """
-
     messages = [
         {
             "role": "system",
@@ -2450,14 +2461,10 @@ def api_parse_floorplan():
             import traceback
             traceback.print_exc()
 
-            # 返回 JSON，避免前端收到 Flask HTML 500。
-            # 同时附带 fallback_result，用户需要时可继续用安全户型兜底，不会卡死页面。
             return jsonify({
                 "ok": False,
-                "message": f"AI解析户型图失败：{str(e)}",
-                "fallback_result": make_safe_floorplan_fallback()
+                "message": f"AI floorplan parsing failed: {str(e)}"
             }), 200
-
     except Exception as e:
         import traceback
         traceback.print_exc()

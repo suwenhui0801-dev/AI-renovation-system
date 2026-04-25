@@ -50,6 +50,8 @@ const el = {
   openingWallSelect: document.getElementById('openingWallSelect'),
   openingOffsetInput: document.getElementById('openingOffsetInput'),
   openingWidthInput: document.getElementById('openingWidthInput'),
+  openingHeightInput: document.getElementById('openingHeightInput'),
+  openingSillInput: document.getElementById('openingSillInput'),
   addOpeningBtn: document.getElementById('addOpeningBtn'),
   applyOpeningBtn: document.getElementById('applyOpeningBtn'),
   deleteOpeningBtn: document.getElementById('deleteOpeningBtn'),
@@ -812,7 +814,7 @@ async function request(url, options = {}) {
   syncUI();
   render2D();
   render3D();
-  afterStateUpdated();
+  afterStateUpdated(data.action || null);
   return data;
 }
 
@@ -836,7 +838,7 @@ async function loadState() {
   syncUI();
   render2D();
   render3D();
-  afterStateUpdated();
+  afterStateUpdated(data.action || null);
 }
 
 
@@ -858,12 +860,16 @@ function fillOpeningForm(opening) {
     el.openingWallSelect.value = state.options.walls[0]?.value || 'top';
     el.openingOffsetInput.value = 0;
     el.openingWidthInput.value = 0.9;
+    if (el.openingHeightInput) el.openingHeightInput.value = 1.5;
+    if (el.openingSillInput) el.openingSillInput.value = 0.9;
     return;
   }
   el.openingNameInput.value = opening.name || '';
   el.openingWallSelect.value = opening.wall;
   el.openingOffsetInput.value = opening.offset;
   el.openingWidthInput.value = opening.width;
+  if (el.openingHeightInput) el.openingHeightInput.value = Number(opening.height || 1.5).toFixed(1);
+  if (el.openingSillInput) el.openingSillInput.value = Number(opening.sill || 0).toFixed(1);
 }
 
 function fillFurnitureForm(item) {
@@ -2657,7 +2663,7 @@ async function applyRoomForm(isNew = false) {
     y: parseFloat(el.roomYInput.value || 0),
     width: parseFloat(el.roomWidthInput.value || 3),
     depth: parseFloat(el.roomDepthInput.value || 3),
-    height: clamp(parseFloat(el.roomHeightInput?.value || 3), 2.2, 6),
+    height: Math.max(0.1, parseFloat(el.roomHeightInput?.value || 3)),
     wall_color: el.roomColorInput.value,
     floor_color: el.roomFloorColorInput?.value || '#d8d0bd',
   });
@@ -2681,6 +2687,8 @@ async function applyOpeningForm(isNew = false) {
     wall: el.openingWallSelect.value,
     offset: parseFloat(el.openingOffsetInput.value || 0),
     width: parseFloat(el.openingWidthInput.value || 0.9),
+    height: Math.max(0.2, parseFloat(el.openingHeightInput?.value || (inferredType === 'window' ? 1.5 : 2.1))),
+    sill: Math.max(0, parseFloat(el.openingSillInput?.value || (inferredType === 'window' ? 0.9 : 0))),
   });
 
   const id = selectedOpening()?.id;
@@ -2912,7 +2920,16 @@ async function runCommand() {
 }
 
 
-function afterStateUpdated() {
+function handleClientAction(action) {
+  if (!action?.type) return;
+  if (action.type === 'enter_first_person') { enterFirstPersonMode(); return; }
+  if (action.type === 'exit_first_person') { exitFirstPersonMode(); return; }
+  if (action.type === 'show_2d') { showTopPanel('command'); return; }
+  if (action.type === 'show_3d') { exitFirstPersonMode(); return; }
+}
+
+function afterStateUpdated(action = null) {
+  handleClientAction(action);
 }
 
 function bindEvents() {
@@ -4056,7 +4073,9 @@ function initAIFloorplanModule() {
             depth: Number(room.depth || 3),
             height: Number(room.height || 3),
             wall_color: room.wall_color || '#f0efe9',
-                      }));
+            floor_color: room.floor_color || '#d8d0bd',
+            wall_material: room.wall_material || 'paint',
+          }));
 
           const normalizedFurnitures = (parseResult.furnitures || []).map((item, index) => ({
             id: item.id || `furniture_${index + 1}`,
