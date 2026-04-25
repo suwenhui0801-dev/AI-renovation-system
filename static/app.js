@@ -128,6 +128,9 @@ let mouseDown = false;
 // 目的：减少 Base64 体积，降低多模态模型调用耗时，避免 Render 连接超时或 ERR_CONNECTION_CLOSED。
 const FLOORPLAN_COMPRESS_MAX_SIDE = 1024;
 const FLOORPLAN_COMPRESS_QUALITY = 0.75;
+let currentFloorplanSource = '';
+let currentFloorplanFilename = '';
+
 
 function estimateDataUrlKB(dataUrl) {
   if (!dataUrl || typeof dataUrl !== 'string') return 0;
@@ -814,7 +817,7 @@ async function request(url, options = {}) {
   syncUI();
   render2D();
   render3D();
-  afterStateUpdated(data.action || null);
+  afterStateUpdated();
   return data;
 }
 
@@ -832,13 +835,14 @@ async function loadState() {
   planPanY = 0;
   planZoom = 1;
 
+  localizeStaticText();
   initThree();
   resizeCanvas();
   resize3DRenderer();
   syncUI();
   render2D();
   render3D();
-  afterStateUpdated(data.action || null);
+  afterStateUpdated();
 }
 
 
@@ -2658,7 +2662,7 @@ el.planCanvas.addEventListener('wheel', evt => {
 
 async function applyRoomForm(isNew = false) {
   const body = JSON.stringify({
-    name: el.roomNameInput.value.trim() || '客厅',
+    name: el.roomNameInput.value.trim() || '房间',
     x: parseFloat(el.roomXInput.value || 0),
     y: parseFloat(el.roomYInput.value || 0),
     width: parseFloat(el.roomWidthInput.value || 3),
@@ -2893,11 +2897,11 @@ function startVoiceRecording() {
 async function runVoiceCommand(transcript = '') {
   const voiceText = String(transcript || el.commandInput.value || '').trim();
   if (!voiceText) {
-    setMessage('没有可发送的语音内容 ', 'info');
+    setMessage('没有可发送的语音内容。', 'info');
     return;
   }
 
-  setMessage(`正在调用 ${VOICE_MODEL_LABEL} 解析语音指令...`, 'info');
+  setMessage('正在解析中文语音指令...', 'info');
   const data = await request('/api/voice-command', {
     method: 'POST',
     body: JSON.stringify({ transcript: voiceText }),
@@ -2913,7 +2917,7 @@ async function runVoiceCommand(transcript = '') {
 async function runCommand() {
   const command = el.commandInput.value.trim();
   if (!command) {
-    setMessage('请输入指令 ', 'info');
+    setMessage('请输入指令。', 'info');
     return;
   }
   await request('/api/command', { method: 'POST', body: JSON.stringify({ command }) });
@@ -2930,6 +2934,61 @@ function handleClientAction(action) {
 
 function afterStateUpdated(action = null) {
   handleClientAction(action);
+}
+
+function localizeStaticText() {
+  document.title = '智能装修系统';
+  const setText = (id, value) => {
+    const node = document.getElementById(id);
+    if (node) node.textContent = value;
+  };
+  const setPlaceholder = (id, value) => {
+    const node = document.getElementById(id);
+    if (node) node.placeholder = value;
+  };
+
+  setText('showCommandPanelBtn', '输入指令');
+  setText('showAIFloorplanPanelBtn', 'AI户型');
+  setText('runCommandBtn', '执行指令');
+  setText('voiceCommandBtn', '语音输入');
+  setText('undoBtn', '撤销');
+  setText('aiGenerateFloorplanBtn', 'AI生成户型图');
+  setText('uploadFloorplanBtn', '上传户型图');
+  setText('saveFloorplanBtn', '保存户型图');
+  setText('applyFloorplanBtn', '应用户型');
+  setText('gestureToggleBtn', '开启手势识别');
+  setText('gestureStatusText', '未开启');
+  setText('toggleRoomPanelBtn', '房间');
+  setText('toggleOpeningPanelBtn', '门窗');
+  setText('toggleFurniturePanelBtn', '家具库');
+  setText('toggleFurnitureEditorPanelBtn', '家具编辑');
+  setText('addRoomBtn', '新增');
+  setText('applyRoomBtn', '应用');
+  setText('deleteRoomBtn', '删除');
+  setText('addOpeningBtn', '新增');
+  setText('applyOpeningBtn', '应用');
+  setText('deleteOpeningBtn', '删除');
+  setText('addFurnitureBtn', '新增');
+  setText('applyFurnitureBtn', '应用');
+  setText('deleteFurnitureBtn', '删除');
+  setText('firstPersonBtn', '进入第一人称');
+  setText('editModeBtn', '编辑模式');
+  setText('exportImageBtn', '导出为图片');
+  setText('exportJsonBtn', '导出为JSON');
+  setText('importJsonBtn', '导入');
+  setText('floorplanStatusText', '等待操作...');
+  setText('selectionInfo', '未选中');
+
+  setPlaceholder('commandInput', '输入中文指令，例如：把卧室墙高改为四米');
+  setPlaceholder('aiFloorplanInput', '输入户型描述，如：两室一厅、南北通透户型');
+  setPlaceholder('roomNameInput', '输入房间名称');
+  setPlaceholder('openingNameInput', '输入门窗名称，如：客厅窗');
+  setPlaceholder('furnitureSearchInput', '搜索家具，如：沙发 / 床 / 马桶');
+
+  const openingHeightLabel = el.openingHeightInput?.closest('label');
+  if (openingHeightLabel) openingHeightLabel.childNodes[0].textContent = '高度 (m)';
+  const openingSillLabel = el.openingSillInput?.closest('label');
+  if (openingSillLabel) openingSillLabel.childNodes[0].textContent = '窗台高度 (m)';
 }
 
 function bindEvents() {
@@ -3871,20 +3930,44 @@ init();
 // 5. 与后端API的交互逻辑
 
 // 初始化AI户型模块事件监听器
+function renderFloorplanPreview(source, filename = '') {
+  currentFloorplanSource = source || '';
+  currentFloorplanFilename = filename || currentFloorplanFilename || '户型图';
+
+  if (!currentFloorplanSource) {
+    el.floorplanPreview.innerHTML = '<div class="floorplan-placeholder">预览区（上传或生成户型图后显示）</div>';
+    return;
+  }
+
+  el.floorplanPreview.innerHTML = `
+    <img
+      src="${currentFloorplanSource}"
+      alt="户型图预览"
+      class="floorplan-preview-img loaded"
+    >
+  `;
+}
+
+function getFloorplanPreviewSource() {
+  if (currentFloorplanSource) return currentFloorplanSource;
+  const img = el.floorplanPreview?.querySelector('img');
+  return img?.src || '';
+}
+
 function initAIFloorplanModule() {
   if (!el.aiFloorplanInput || !el.aiGenerateFloorplanBtn) return;
 
-  el.aiFloorplanInput.addEventListener('input', function() {
-    const inputValue = this.value.trim();
-    el.aiGenerateFloorplanBtn.disabled = !inputValue;
-  });
+  const syncGenerateButton = () => {
+    el.aiGenerateFloorplanBtn.disabled = !el.aiFloorplanInput.value.trim();
+  };
 
-  el.aiGenerateFloorplanBtn.disabled = !el.aiFloorplanInput.value.trim();
+  el.aiFloorplanInput.addEventListener('input', syncGenerateButton);
+  syncGenerateButton();
 
-  el.aiGenerateFloorplanBtn.addEventListener('click', async () => {
+  el.aiGenerateFloorplanBtn.onclick = async () => {
     const prompt = el.aiFloorplanInput.value.trim();
     if (!prompt) {
-      setMessage('请输入户型图描述', 'error');
+      setMessage('请输入户型描述。', 'error');
       return;
     }
 
@@ -3892,277 +3975,156 @@ function initAIFloorplanModule() {
     try {
       const response = await fetch('/api/ai/generate_floorplan', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({ prompt: prompt })
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prompt }),
       });
-
-      console.log('API响应状态:', response.status);
-
-      const responseText = await response.text();
-      let result;
-
-      try {
-        result = JSON.parse(responseText);
-      } catch (e) {
-        console.error('解析接口返回的不是JSON:', responseText.slice(0, 500));
-        throw new Error(`解析接口返回异常，HTTP ${response.status}`);
+      const result = await response.json();
+      if (!response.ok || !result?.ok) {
+        throw new Error(result?.message || '生成失败');
       }
 
-      console.log('API响应结果:', result);
-      if (result.ok) {
-        const imageUrl =
-          result.image_url ||
-          result.result?.image_url ||
-          result.result?.url ||
-          result.result;
-
-        if (!imageUrl || typeof imageUrl !== 'string') {
-          throw new Error('后端没有返回有效的户型图图片地址');
-        }
-
-        el.floorplanPreview.innerHTML = `
-          <img
-            src="${imageUrl}"
-            alt="生成的户型图"
-            class="floorplan-preview-img"
-            onload="this.classList.add('loaded')"
-            onerror="this.parentElement.innerHTML='<div class=&quot;floorplan-placeholder&quot;>图片加载失败，请重新生成</div>'"
-          >
-        `;
-        el.floorplanStatusText.textContent = '户型图生成成功！';
-        setMessage('户型图生成成功', 'success');
-      } else {
-        el.floorplanStatusText.textContent = '生成失败，请重试';
-        setMessage(`生成失败: ${result.message}`, 'error');
+      const imageUrl = result.image_url || result.result?.image_url || result.result?.url || result.result;
+      if (!imageUrl || typeof imageUrl !== 'string') {
+        throw new Error('未返回可用的户型图图片。');
       }
+
+      renderFloorplanPreview(imageUrl, 'AI生成户型图');
+      el.floorplanStatusText.textContent = '户型图生成成功。';
+      setMessage('AI 生成户型图成功。', 'success');
     } catch (error) {
-      console.error('生成户型图失败:', error);
-      el.floorplanStatusText.textContent = '生成失败，请重试';
-      setMessage('户型图生成失败', 'error');
+      el.floorplanStatusText.textContent = '户型图生成失败。';
+      setMessage(`AI 生成户型图失败：${error?.message || '未知错误'}`, 'error');
     }
-  });
+  };
 
-  // 上传户型图：上传后先压缩，再放入预览区，后续“应用户型”会直接使用压缩后的图片。
-  el.uploadFloorplanBtn.addEventListener('click', () => {
+  el.uploadFloorplanBtn.onclick = () => {
     const input = document.createElement('input');
     input.type = 'file';
     input.accept = 'image/*';
-    input.onchange = async (e) => {
-      const file = e.target.files[0];
-      if (file) {
-        try {
-          el.floorplanStatusText.textContent = '正在压缩户型图...';
-          const compressed = await compressFloorplanImageToDataUrl(file);
-
-          // 显示压缩后的图片，设置样式确保适应预览区不拉伸。
-          el.floorplanPreview.innerHTML = `<img src="${compressed.dataUrl}" alt="上传的户型图" style="max-width: 100%; max-height: 100%; object-fit: contain;">`;
-          el.floorplanStatusText.textContent = '户型图已上传并压缩成功！';
-          setMessage(`户型图上传成功，已压缩为约 ${compressed.compressedKB}KB`, 'success');
-          console.log('户型图上传压缩完成:', compressed);
-        } catch (error) {
-          console.error('上传户型图失败:', error);
-          el.floorplanStatusText.textContent = '上传失败，请重试';
-          setMessage(`户型图上传失败：${error?.message || '未知错误'}`, 'error');
-        }
+    input.onchange = async event => {
+      const file = event.target.files?.[0];
+      if (!file) return;
+      try {
+        el.floorplanStatusText.textContent = '正在处理上传图片...';
+        const compressed = await compressFloorplanImageToDataUrl(file);
+        renderFloorplanPreview(compressed.dataUrl, file.name || '上传户型图');
+        el.floorplanStatusText.textContent = '户型图上传成功。';
+        setMessage(`户型图上传成功，当前大小约 ${compressed.compressedKB}KB。`, 'success');
+      } catch (error) {
+        el.floorplanStatusText.textContent = '户型图上传失败。';
+        setMessage(`户型图上传失败：${error?.message || '未知错误'}`, 'error');
       }
     };
     input.click();
-  });
+  };
 
-  // 保存户型图
-  el.saveFloorplanBtn.addEventListener('click', () => {
-    const previewContent = el.floorplanPreview.innerHTML;
-    if (!previewContent.includes('img')) {
-      setMessage('请先生成或上传户型图', 'error');
+  el.saveFloorplanBtn.onclick = () => {
+    const source = getFloorplanPreviewSource();
+    if (!source) {
+      setMessage('当前没有可保存的户型图。', 'error');
       return;
     }
 
-    // 提取图片URL
-    const imgElement = el.floorplanPreview.querySelector('img');
-    if (imgElement) {
-      const link = document.createElement('a');
-      link.download = `户型图_${new Date().toISOString().slice(0, 10)}.png`;
-      link.href = imgElement.src;
-      link.click();
-      el.floorplanStatusText.textContent = '户型图已保存！';
-      setMessage('户型图保存成功', 'success');
-    } else {
-      setMessage('保存户型图失败', 'error');
-    }
-  });
+    const link = document.createElement('a');
+    const dateTag = new Date().toISOString().slice(0, 10);
+    link.download = `${currentFloorplanFilename || '户型图'}-${dateTag}.png`;
+    link.href = source;
+    link.click();
+    el.floorplanStatusText.textContent = '户型图已保存。';
+    setMessage('户型图已保存。', 'success');
+  };
 
-  // 应用户型
-  el.applyFloorplanBtn.addEventListener('click', async () => {
-    console.log('应用户型按钮被点击');
-    const previewContent = el.floorplanPreview.innerHTML;
-    if (!previewContent.includes('img')) {
-      setMessage('请先生成或上传户型图', 'error');
+  el.applyFloorplanBtn.onclick = async () => {
+    const source = getFloorplanPreviewSource();
+    if (!source) {
+      setMessage('请先上传或生成户型图。', 'error');
       return;
     }
 
     el.floorplanStatusText.textContent = '正在解析户型图...';
     try {
-      const imgElement = el.floorplanPreview.querySelector('img');
-      const imageUrl = imgElement.src;
-      
-      // 区分本地图片和网络图片
-      let image_base64 = '';
-      let image_url = '';
-      
-      if (imageUrl.startsWith('data:image/')) {
-        // 本地上传的图片：发送前再做一次兜底压缩，避免预览区被旧数据或未压缩数据污染。
-        console.log('本地图片，发送前兜底压缩Base64');
-        const compressed = await compressFloorplanImageToDataUrl(imageUrl);
-        image_base64 = splitBase64FromDataUrl(compressed.dataUrl);
-        console.log('发送给解析接口的图片大小约:', compressed.compressedKB, 'KB', compressed);
-      } else {
-        // 网络图片（AI生成）：优先在前端拉取并压缩成Base64；若跨域或压缩失败，则回退为URL交给后端处理。
-        console.log('网络图片，尝试发送前兜底压缩');
-        try {
-          const compressed = await compressFloorplanImageToDataUrl(imageUrl);
-          image_base64 = splitBase64FromDataUrl(compressed.dataUrl);
-          console.log('网络户型图已压缩为Base64，大小约:', compressed.compressedKB, 'KB', compressed);
-        } catch (compressError) {
-          console.warn('网络图片前端压缩失败，回退为URL传给后端:', compressError);
-          image_url = imageUrl;
-        }
-      }
-      
-      // 调用后端API解析户型图
-      console.log('开始调用API解析户型图');
-      const response = await fetch('/api/ai/parse_floorplan', {
+      const compressed = await compressFloorplanImageToDataUrl(source);
+      const parseResponse = await fetch('/api/ai/parse_floorplan', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          image_url: image_url,
-          image_base64: image_base64
-        })
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ image_base64: splitBase64FromDataUrl(compressed.dataUrl) }),
       });
-      
-      console.log('API响应状态:', response.status);
-
-      const responseText = await response.text();
-      let result;
-
-      try {
-        result = JSON.parse(responseText);
-      } catch (e) {
-        console.error('解析接口返回的不是JSON，原始内容:', responseText.slice(0, 800));
-        throw new Error(`解析接口返回异常，HTTP ${response.status}`);
+      const parseResult = await parseResponse.json();
+      if (!parseResponse.ok || !parseResult?.ok) {
+        throw new Error(parseResult?.message || '解析失败');
       }
 
-      console.log('API响应结果:', result);
-      if (result.ok) {
-        // 解析结果
-        const parseResult = result.result;
-        
-        // 写入tmp.json文件（模拟）
-        try {
-          // 这里需要将解析结果转换为与导出格式一致的JSON
-          // 标准化导入的数据，确保所有字段都有合理的默认值
-          const normalizedRooms = (parseResult.rooms || []).map((room, index) => ({
-            id: room.id || `room_${index + 1}`,
-            name: room.name || `房间${index + 1}`,
-            x: Number(room.x || 0),
-            y: Number(room.y || 0),
-            width: Number(room.width || 3),
-            depth: Number(room.depth || 3),
-            height: Number(room.height || 3),
-            wall_color: room.wall_color || '#f0efe9',
-            floor_color: room.floor_color || '#d8d0bd',
-            wall_material: room.wall_material || 'paint',
-          }));
+      const parsed = parseResult.result || {};
+      const normalizedRooms = (parsed.rooms || []).map((room, index) => ({
+        id: room.id || `room_${index + 1}`,
+        name: room.name || `房间${index + 1}`,
+        x: Number(room.x || 0),
+        y: Number(room.y || 0),
+        width: Number(room.width || 3),
+        depth: Number(room.depth || 3),
+        height: Number(room.height || 3),
+        wall_color: room.wall_color || '#f0efe9',
+        floor_color: room.floor_color || '#d8d0bd',
+        wall_material: room.wall_material || '乳胶漆',
+      }));
 
-          const normalizedFurnitures = (parseResult.furnitures || []).map((item, index) => ({
-            id: item.id || `furniture_${index + 1}`,
-            type: item.type || 'loungeSofa',
-            label: item.label || '家具',
-            room_id: item.room_id || normalizedRooms[0]?.id || null,
-            x: Number(item.x || 0),
-            y: Number(item.y || 0),
-            z: Number(item.z || 0),
-            width: Number(item.width || 1),
-            depth: Number(item.depth || 1),
-            height: Number(item.height || 0.8),
-            rotation: Number(item.rotation || 0),
-            color: item.color || '#6f7d8c',
-            material: item.material || '布艺',
-            placement: item.placement || 'floor',
-            wall: item.wall || null,
-            wall_offset: Number(item.wall_offset || 0),
-            mount_height: Number(item.mount_height || 1.5),
-          }));
+      const normalizedFurnitures = (parsed.furnitures || []).map((item, index) => ({
+        id: item.id || `furniture_${index + 1}`,
+        type: item.type || 'loungeSofa',
+        label: item.label || '家具',
+        room_id: item.room_id || normalizedRooms[0]?.id || null,
+        x: Number(item.x || 0),
+        y: Number(item.y || 0),
+        z: Number(item.z || 0),
+        width: Number(item.width || 1),
+        depth: Number(item.depth || 1),
+        height: Number(item.height || 0.8),
+        rotation: Number(item.rotation || 0),
+        color: item.color || '#6f7d8c',
+        material: item.material || '布艺',
+        placement: item.placement || 'floor',
+        wall: item.wall || null,
+        wall_offset: Number(item.wall_offset || 0),
+        mount_height: Number(item.mount_height || 1.5),
+      }));
 
-          const normalizedOpenings = (parseResult.openings || []).map((item, index) => ({
-            id: item.id || `opening_${index + 1}`,
-            type: item.type || 'door',
-            name: item.name || '门窗',
-            room_id: item.room_id || normalizedRooms[0]?.id || null,
-            wall: item.wall || 'top',
-            offset: Number(item.offset || 0),
-            width: Number(item.width || 1),
-            height: Number(item.height || 2.1),
-            sill: Number(item.sill || 0),
-            color: item.color || '#8b6a4d',
-            material: item.material || '木纹',
-          }));
+      const normalizedOpenings = (parsed.openings || []).map((item, index) => ({
+        id: item.id || `opening_${index + 1}`,
+        type: item.type || 'door',
+        name: item.name || (item.type === 'window' ? '窗' : '门'),
+        room_id: item.room_id || normalizedRooms[0]?.id || null,
+        wall: item.wall || 'top',
+        offset: Number(item.offset || 0),
+        width: Number(item.width || 1),
+        height: Number(item.height || (item.type === 'window' ? 1.5 : 2.1)),
+        sill: Number(item.sill || 0),
+        color: item.color || '#8b6a4d',
+        material: item.material || (item.type === 'window' ? '玻璃' : '木质'),
+      }));
 
-          const floorplanData = {
-            rooms: normalizedRooms,
-            furnitures: normalizedFurnitures,
-            openings: normalizedOpenings,
-            options: {
-              room_types: ["卧室", "浴室", "客厅", "饭厅", "厨房", "阳台"],
-              room_materials: ["木纹", "布艺", "皮质", "绒面", "金属", "石材", "白色瓷砖", "大理石", "原木风", "玻璃", "烤漆", "混凝土", "陶瓷"],
-              opening_types: [{ "label": "门", "value": "door" }, { "label": "窗", "value": "window" }],
-              walls: [{ "label": "上墙", "value": "top" }, { "label": "右墙", "value": "right" }, { "label": "下墙", "value": "bottom" }, { "label": "左墙", "value": "left" }],
-              furniture_catalog: []
-            },
-            grid_size_m: 0.5,
-            show_grid: true,
-            message: "户型已导入成功！"
-          };
-          
-          // 导入到2D和3D界面
-          // 使用现有的导入逻辑
-          const importResponse = await fetch('/api/import', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json'
-            },
-            body: JSON.stringify(floorplanData)
-          });
-          
-          const importResult = await importResponse.json();
-          if (importResult.ok) {
-            // 重新加载状态，更新2D和3D界面
-            await loadState();
-            el.floorplanStatusText.textContent = '户型已导入成功！';
-            setMessage('户型应用成功', 'success');
-          } else {
-            el.floorplanStatusText.textContent = '导入失败，请重试';
-            setMessage(`导入失败: ${importResult.message}`, 'error');
-          }
-        } catch (error) {
-          console.error('写入tmp.json失败:', error);
-          el.floorplanStatusText.textContent = '应用失败，请重试';
-          setMessage('户型应用失败', 'error');
-        }
-      } else {
-        el.floorplanStatusText.textContent = '解析失败，请重试';
-        setMessage(`解析失败: ${result.message}`, 'error');
+      const importResponse = await fetch('/api/import', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          rooms: normalizedRooms,
+          furnitures: normalizedFurnitures,
+          openings: normalizedOpenings,
+        }),
+      });
+      const importResult = await importResponse.json();
+      if (!importResponse.ok || !importResult?.ok) {
+        throw new Error(importResult?.message || '导入失败');
       }
+
+      await loadState();
+      el.floorplanStatusText.textContent = '户型图应用成功。';
+      setMessage('户型图已应用到当前视图。', 'success');
     } catch (error) {
-      console.error('应用户型失败:', error);
-      const msg = error?.message || '未知错误';
-      el.floorplanStatusText.textContent = `应用失败：${msg}`;
-      setMessage(`户型应用失败：${msg}`, 'error');
+      el.floorplanStatusText.textContent = '户型图应用失败。';
+      setMessage(`户型图应用失败：${error?.message || '未知错误'}`, 'error');
     }
-  });
+  };
 }
+
 
 // AI户型图功能实现区域结束

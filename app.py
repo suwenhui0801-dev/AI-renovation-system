@@ -1229,7 +1229,7 @@ def add_opening(
     material: Optional[str] = None,
 ) -> tuple[bool, str, Optional[Opening]]:
     if opening_type not in OPENING_TYPE_LABELS or wall not in WALLS:
-        return False, "Invalid opening parameters.", None
+        return False, "é¨çªåæ°ä¸æ­£ç¡®ã", None
 
     same_type_count = len([o for o in STATE.openings if o.type == opening_type and o.room_id == room.id]) + 1
     opening = Opening(
@@ -1243,12 +1243,12 @@ def add_opening(
         height=float(height if height is not None else (1.5 if opening_type == "window" else 2.1)),
         sill=float(sill if sill is not None else (0.9 if opening_type == "window" else 0.0)),
         color=color or ("#79bdf8" if opening_type == "window" else "#8b6a4d"),
-        material=material or ("glass" if opening_type == "window" else "wood"),
+        material=material or ("ç»ç" if opening_type == "window" else "æ¨è´¨"),
     )
 
     clamp_opening(opening)
     STATE.openings.append(opening)
-    return True, f"Added {OPENING_TYPE_LABELS[opening_type]} to {room.name}.", opening
+    return True, f"å·²å¨{room.name}æ·»å {OPENING_TYPE_LABELS[opening_type]}ã", opening
 
 
 def update_opening(opening: Opening, payload: Dict) -> tuple[bool, str]:
@@ -1263,7 +1263,7 @@ def update_opening(opening: Opening, payload: Dict) -> tuple[bool, str]:
         opening.height = 1.5 if opening.type == "window" else 2.1
         opening.sill = 0.9 if opening.type == "window" else 0.0
         opening.color = "#79bdf8" if opening.type == "window" else "#8b6a4d"
-        opening.material = "玻璃" if opening.type == "window" else "木纹"
+        opening.material = "ç»ç" if opening.type == "window" else "æ¨è´¨"
 
     for key in ["name", "offset", "width", "height", "sill", "color", "material"]:
         if key in payload:
@@ -1275,12 +1275,12 @@ def update_opening(opening: Opening, payload: Dict) -> tuple[bool, str]:
     opening.height = max(0.2, float(opening.height))
     opening.sill = max(0.0, float(opening.sill))
     clamp_opening(opening)
-    return True, f"已更新{opening.name or OPENING_TYPE_LABELS[opening.type]}。"
+    return True, f"å·²æ´æ°{opening.name or OPENING_TYPE_LABELS[opening.type]}ã"
 
 
 def delete_opening(opening: Opening) -> str:
     STATE.openings = [o for o in STATE.openings if o.id != opening.id]
-    return f"已删除{opening.name or OPENING_TYPE_LABELS[opening.type]}。"
+    return f"å·²å é¤{opening.name or OPENING_TYPE_LABELS[opening.type]}ã"
 
 
 def parse_distance(text: str, default: float = 0.9) -> float:
@@ -1310,31 +1310,46 @@ def detect_furniture_type(text: str) -> Optional[str]:
 
 
 def call_ark_chat_json(system_prompt: str, user_prompt: str, max_tokens: int = 260) -> Dict:
-    """
-    Local rule mode: do not call external APIs, just pass through a normalized command.
-    """
-    command = user_prompt
-    transcript_prefix = "语音转文字结果："
-    if transcript_prefix in command:
-        command = command.split(transcript_prefix, 1)[-1]
-    command = command.strip()
-    return {
-        "command": command,
-        "reason": "Handled by local normalization rules.",
-        "confidence": "medium",
-    }
-
-
-def normalize_voice_command_with_llm(transcript: str) -> Dict:
-    transcript = (transcript or "").strip()
+    prompt = (user_prompt or '').strip()
+    transcript = prompt.replace('请将这段中文语音转成标准中文家装指令：', '').strip()
     if not transcript:
         return {
             "command": "",
-            "reason": "No transcript detected.",
+            "reason": "未识别到有效语音内容。",
+            "confidence": "low",
+        }
+    return normalize_voice_command_with_llm(transcript)
+
+
+def normalize_voice_command_with_llm(transcript: str) -> Dict:
+    transcript = (transcript or '').strip()
+    if not transcript:
+        return {
+            "command": "",
+            "reason": "未识别到有效语音内容。",
             "confidence": "low",
         }
 
-    return call_ark_chat_json("", f"语音转文字结果：{transcript}")
+    normalized = transcript
+    replacements = {
+        '二笛': '2D',
+        '二维': '2D',
+        '三笛': '3D',
+        '三维': '3D',
+        '第一视角': '第一人称视角',
+        '第一人称模式': '第一人称视角',
+        '窗台高': '窗台高度',
+        '墙高': '墙面高度',
+        '地砖': '地板',
+    }
+    for src, target in replacements.items():
+        normalized = normalized.replace(src, target)
+
+    return {
+        "command": normalized,
+        "reason": "已按中文规则标准化语音指令。",
+        "confidence": "high",
+    }
 
 
 def detect_opening(text: str, room: Optional[Room] = None, opening_type: Optional[str] = None) -> Optional[Opening]:
@@ -1348,24 +1363,24 @@ def detect_opening(text: str, room: Optional[Room] = None, opening_type: Optiona
         if opening.name and opening.name in text:
             return opening
 
-    if opening_type == "window" or "窗" in text:
-        return next((item for item in candidates if item.type == "window"), None)
-    if opening_type == "door" or "门" in text:
-        return next((item for item in candidates if item.type == "door"), None)
+    if opening_type == 'window' or '窗' in text:
+        return next((item for item in candidates if item.type == 'window'), None)
+    if opening_type == 'door' or '门' in text:
+        return next((item for item in candidates if item.type == 'door'), None)
     return candidates[0] if candidates else None
 
 
 def detect_client_action(text: str) -> Optional[Dict[str, str]]:
-    normalized = (text or "").strip().lower()
+    normalized = (text or '').strip().lower()
     if not normalized:
         return None
-    if "第一人称" in normalized and any(token in normalized for token in ["进入", "切换", "开启"]):
+    if '第一人称' in normalized and any(token in normalized for token in ['进入', '开启', '切换到', '打开']):
         return {"type": "enter_first_person"}
-    if "第一人称" in normalized and any(token in normalized for token in ["退出", "关闭"]):
+    if '第一人称' in normalized and any(token in normalized for token in ['退出', '关闭', '离开']):
         return {"type": "exit_first_person"}
-    if any(token in normalized for token in ["切换2d", "切到2d", "二维", "俯视"]):
+    if any(token in normalized for token in ['切换到2d', '切换到 2d', '2d视图', '2d模式', '二维视图', '平面视图']):
         return {"type": "show_2d"}
-    if any(token in normalized for token in ["切换3d", "切到3d", "三维", "立体"]):
+    if any(token in normalized for token in ['切换到3d', '切换到 3d', '3d视图', '3d模式', '三维视图', '立体视图']):
         return {"type": "show_3d"}
     return None
 
@@ -1373,141 +1388,129 @@ def detect_client_action(text: str) -> Optional[Dict[str, str]]:
 def apply_command(text: str) -> str:
     text = text.strip()
     if not text:
-        return "Please enter a command."
+        return '请输入指令。'
 
     action = detect_client_action(text)
     if action:
         action_messages = {
-            "enter_first_person": "Entered first-person view.",
-            "exit_first_person": "Exited first-person view.",
-            "show_2d": "Switched to 2D view.",
-            "show_3d": "Switched to 3D view.",
+            'enter_first_person': '已进入第一人称视角。',
+            'exit_first_person': '已退出第一人称视角。',
+            'show_2d': '已切换到 2D 视图。',
+            'show_3d': '已切换到 3D 视图。',
         }
-        return action_messages.get(action["type"], "View updated.")
+        return action_messages.get(action['type'], '已执行指令。')
 
-    if "撤销" in text:
+    if '撤销' in text:
         return STATE.undo()
-    if "重做" in text or "恢复" in text:
+    if '重做' in text or '恢复' in text:
         return STATE.redo()
 
-    if "网格" in text and any(w in text for w in ["显示", "开启"]):
+    if '显示网格' in text or '打开网格' in text:
         STATE.show_grid = True
-        return "Grid shown."
-
-    if "网格" in text and any(w in text for w in ["隐藏", "关闭"]):
+        return '已显示网格。'
+    if '隐藏网格' in text or '关闭网格' in text:
         STATE.show_grid = False
-        return "Grid hidden."
+        return '已隐藏网格。'
 
     room = detect_room(text)
     ftype = detect_furniture_type(text)
     color = detect_color(text)
 
-    if "添加房间" in text or ("新增" in text and "房间" in text):
+    if '添加房间' in text or ('新建' in text and '房间' in text):
         width = parse_distance(text, 3.0)
-        all_nums = re.findall(r"(\d+(?:\.\d+)?)\s*米", text)
+        all_nums = re.findall(r'(\d+(?:\.\d+)?)\s*米?', text)
         depth = float(all_nums[1]) if len(all_nums) > 1 else width
-        ok, msg, _ = add_room(f"room{len(STATE.rooms)+1}", 0.5 + len(STATE.rooms) * 0.6, 0.5 + len(STATE.rooms) * 0.6, width, depth)
-        return msg if ok else msg
+        ok, msg, _ = add_room(f'房间{len(STATE.rooms)+1}', 0.5 + len(STATE.rooms) * 0.6, 0.5 + len(STATE.rooms) * 0.6, width, depth)
+        return msg
 
-    if room and ("添加门" in text or "添加窗" in text):
-        wall = "top"
-        if "左墙" in text:
-            wall = "left"
-        elif "右墙" in text:
-            wall = "right"
-        elif "下墙" in text:
-            wall = "bottom"
-        opening_type = "window" if "窗" in text else "door"
-        ok, msg, _ = add_opening(room, opening_type, wall, 0.4, parse_distance(text, 1.2 if opening_type == "window" else 0.9))
-        return msg if ok else msg
+    if room and any(word in text for word in ['添加窗', '加窗', '新增窗', '开窗', '添加门', '加门', '新增门']):
+        wall = 'top'
+        if '左墙' in text:
+            wall = 'left'
+        elif '右墙' in text:
+            wall = 'right'
+        elif '下墙' in text or '底墙' in text:
+            wall = 'bottom'
+        opening_type = 'window' if '窗' in text else 'door'
+        ok, msg, _ = add_opening(room, opening_type, wall, 0.4, parse_distance(text, 1.2 if opening_type == 'window' else 0.9))
+        return msg
 
-    if room and ftype and any(w in text for w in ["添加", "放置", "放一个"]):
+    if room and ftype and any(word in text for word in ['添加', '摆放', '放入']):
         ok, msg, _ = add_furniture(room, ftype, color=color)
-        return msg if ok else msg
+        return msg
 
-    if room and any(w in text for w in ["宽度", "进深", "深度", "高度", "墙高", "墙面", "地面", "地板", "地砖", "材质"]):
-        width_m = re.search(r"宽度(?:改为|到|至)?\s*(\d+(?:\.\d+)?)\s*米", text)
-        depth_m = re.search(r"(?:进深|深度)(?:改为|到|至)?\s*(\d+(?:\.\d+)?)\s*米", text)
-        height_m = re.search(r"(?:墙高|房间高度|高度)(?:改为|到|至)?\s*(\d+(?:\.\d+)?)\s*米", text)
+    if room and any(word in text for word in ['改', '修改', '调整', '变成', '设置']) and any(word in text for word in ['宽', '深', '高', '墙', '地板', '材质', '颜色']):
+        width_m = re.search(r'宽(?:度)?(?:改成|调整为|设置为|为)?\s*(\d+(?:\.\d+)?)\s*米?', text)
+        depth_m = re.search(r'(?:深度|进深)(?:改成|调整为|设置为|为)?\s*(\d+(?:\.\d+)?)\s*米?', text)
+        height_m = re.search(r'(?:墙高|层高|高度|墙面高度)(?:改成|调整为|设置为|为)?\s*(\d+(?:\.\d+)?)\s*米?', text)
         payload = {}
         if width_m:
-            payload["width"] = float(width_m.group(1))
+            payload['width'] = float(width_m.group(1))
         if depth_m:
-            payload["depth"] = float(depth_m.group(1))
+            payload['depth'] = float(depth_m.group(1))
         if height_m:
-            payload["height"] = float(height_m.group(1))
+            payload['height'] = float(height_m.group(1))
         if color:
-            if any(w in text for w in ["地面", "地板", "地砖", "地毯"]):
-                payload["floor_color"] = color
+            if any(word in text for word in ['地板', '地面', '地砖']):
+                payload['floor_color'] = color
             else:
-                payload["wall_color"] = color
-        if "材质" in text:
-            material_map = {
-                "瓷砖": "tile",
-                "乳胶漆": "paint",
-                "木": "wood",
-                "护墙板": "wall_panel",
-                "混凝土": "concrete",
-                "石材": "stone",
-            }
-            for keyword, material_name in material_map.items():
-                if keyword in text:
-                    payload["wall_material"] = material_name
-                    break
+                payload['wall_color'] = color
+        for keyword in ['乳胶漆', '木饰面', '瓷砖', '石材', '玻璃', '混凝土']:
+            if keyword in text:
+                payload['wall_material'] = keyword
+                break
         if payload:
             ok, msg = update_room(room, payload)
-            return msg if ok else msg
+            return msg
 
-    opening_type = "window" if "窗" in text else ("door" if "门" in text else None)
+    opening_type = 'window' if '窗' in text else ('door' if '门' in text else None)
     opening = detect_opening(text, room=room, opening_type=opening_type)
-    if opening and any(w in text for w in ["高度", "窗台", "窗宽", "宽度", "颜色", "材质"]):
+    if opening and any(word in text for word in ['改', '修改', '调整', '设置']) and any(word in text for word in ['窗高', '窗户高度', '门高', '高度', '窗台高度', '宽度', '颜色', '材质']):
         payload = {}
-        height_m = re.search(r"(?:窗户?|门)?高度(?:改为|到|至)?\s*(\d+(?:\.\d+)?)\s*米", text)
-        sill_m = re.search(r"(?:窗台高度|窗台)(?:改为|到|至)?\s*(\d+(?:\.\d+)?)\s*米", text)
-        width_m = re.search(r"(?:窗宽|门宽|宽度)(?:改为|到|至)?\s*(\d+(?:\.\d+)?)\s*米", text)
+        height_m = re.search(r'(?:窗户高度|窗高|门高|门高度|高度)(?:改成|调整为|设置为|为)?\s*(\d+(?:\.\d+)?)\s*米?', text)
+        sill_m = re.search(r'(?:窗台高度|窗台高)(?:改成|调整为|设置为|为)?\s*(\d+(?:\.\d+)?)\s*米?', text)
+        width_m = re.search(r'(?:宽度|门宽|窗宽)(?:改成|调整为|设置为|为)?\s*(\d+(?:\.\d+)?)\s*米?', text)
         if height_m:
-            payload["height"] = float(height_m.group(1))
+            payload['height'] = float(height_m.group(1))
         if sill_m:
-            payload["sill"] = float(sill_m.group(1))
+            payload['sill'] = float(sill_m.group(1))
         if width_m:
-            payload["width"] = float(width_m.group(1))
+            payload['width'] = float(width_m.group(1))
         if color:
-            payload["color"] = color
-        if "玻璃" in text:
-            payload["material"] = "glass"
-        elif "木" in text:
-            payload["material"] = "wood"
-        elif "铝" in text:
-            payload["material"] = "aluminum"
+            payload['color'] = color
+        for keyword in ['木质', '玻璃', '金属']:
+            if keyword in text:
+                payload['material'] = keyword
+                break
         if payload:
             ok, msg = update_opening(opening, payload)
-            return msg if ok else msg
+            return msg
 
-    if ftype and any(w in text for w in ["删除", "移除"]):
+    if ftype and any(word in text for word in ['删除', '移除']):
         if room:
             item = next((f for f in STATE.furnitures if f.type == ftype and f.room_id == room.id), None)
             if item:
                 return delete_furniture(item)
-            return f"{room.name} has no {ftype}."
+            return f'{room.name}里没有对应家具。'
         item = next((f for f in STATE.furnitures if f.type == ftype), None)
         if item:
             return delete_furniture(item)
-        return f"{ftype} not found."
+        return '没有找到要删除的家具。'
 
     if ftype and color:
         if room:
             item = next((f for f in STATE.furnitures if f.type == ftype and f.room_id == room.id), None)
             if item:
-                ok, msg = update_furniture(item, {"color": color})
-                return msg if ok else msg
-            return f"{room.name} has no {ftype}."
+                ok, msg = update_furniture(item, {'color': color})
+                return msg
+            return f'{room.name}里没有对应家具。'
         item = next((f for f in STATE.furnitures if f.type == ftype), None)
         if item:
-            ok, msg = update_furniture(item, {"color": color})
-            return msg if ok else msg
-        return f"{ftype} not found."
+            ok, msg = update_furniture(item, {'color': color})
+            return msg
+        return '没有找到要修改的家具。'
 
-    return "Command not recognized. Try entering first-person view, switching to 2D, changing room height, or updating a window height."
+    return '暂时没有理解这条中文指令。可以试试：进入第一人称视角、切换到2D视图、把卧室墙高改成4米、把客厅窗户高度改成1.8米。'
 
 
 @app.route("/")
@@ -1526,12 +1529,12 @@ def api_voice_command():
     payload = request.get_json(silent=True) or {}
     transcript = str(payload.get("transcript", "")).strip()
     if not transcript:
-        return jsonify({"ok": False, "message": "No transcript received.", "state": STATE.to_dict()}), 400
+        return jsonify({"ok": False, "message": "未收到语音转写结果。", "state": STATE.to_dict()}), 400
 
     try:
         llm_result = normalize_voice_command_with_llm(transcript)
     except Exception as exc:
-        msg = f"{ARK_MODEL_LABEL} command parsing failed: {exc}"
+        msg = f"{ARK_MODEL_LABEL} 语音指令规则处理失败：{exc}"
         STATE.message = msg
         return jsonify({
             "ok": False,
@@ -1545,7 +1548,7 @@ def api_voice_command():
     llm_confidence = str(llm_result.get("confidence", "")).strip() or "unknown"
 
     if not normalized_command:
-        msg = f"Transcript recognized, but {ARK_MODEL_LABEL} did not return an executable command.{(' Reason: ' + llm_reason) if llm_reason else ''}"
+        msg = f"无法将语音内容解析为中文指令。{('原因：' + llm_reason) if llm_reason else ''}"
         STATE.message = msg
         return jsonify({
             "ok": False,
@@ -1590,13 +1593,13 @@ def api_command():
 @app.route("/api/undo", methods=["POST"])
 def api_undo():
     STATE.undo()
-    return jsonify({"ok": True, "message": "已撤销上一步操作", "state": STATE.to_dict()})
+    return jsonify({"ok": True, "message": "已撤销上一步操作。", "state": STATE.to_dict()})
 
 
 @app.route("/api/redo", methods=["POST"])
 def api_redo():
     STATE.redo()
-    return jsonify({"ok": True, "message": "已重做上一步操作", "state": STATE.to_dict()})
+    return jsonify({"ok": True, "message": "已恢复上一步操作。", "state": STATE.to_dict()})
 
 
 @app.route("/api/import", methods=["POST"])
@@ -2463,7 +2466,7 @@ def api_parse_floorplan():
 
             return jsonify({
                 "ok": False,
-                "message": f"AI floorplan parsing failed: {str(e)}"
+                "message": f"AI????????{str(e)}"
             }), 200
     except Exception as e:
         import traceback
