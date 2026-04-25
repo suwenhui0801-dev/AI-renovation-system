@@ -694,10 +694,25 @@ function inferFeedbackKind(message, explicitKind = null) {
   return 'info';
 }
 
+function repairDisplayText(value) {
+  const text = String(value || '');
+  if (!text) return '';
+  if (!/[ÃÂÅÆÇÈÉÊËÌÍÎÏÐÑÒÓÔÕÖØÙÚÛÜÝÞßàáâãäåæç]/.test(text) && !/å|æ|ç|é|è|â|ï|ð/.test(text)) {
+    return text;
+  }
+  try {
+    const repaired = decodeURIComponent(escape(text));
+    return repaired || text;
+  } catch {
+    return text;
+  }
+}
+
 function setMessage(message, kind = null) {
-  const resolvedKind = inferFeedbackKind(message, kind);
+  const displayMessage = repairDisplayText(message);
+  const resolvedKind = inferFeedbackKind(displayMessage, kind);
   lastFeedbackKind = resolvedKind;
-  el.messageBox.textContent = message || '';
+  el.messageBox.textContent = displayMessage;
   const holder = el.messageBox.closest('.feedback-item');
   holder.classList.remove('feedback-success', 'feedback-error', 'feedback-info');
   holder.classList.add(`feedback-${resolvedKind}`);
@@ -748,12 +763,15 @@ function renderFurnitureLibrary() {
 
   el.furnitureLibrary.innerHTML = filtered.map(item => {
     const isOpening = item.kind === 'opening';
+    const itemLabel = repairDisplayText(item.label || '未命名家具');
+    const itemCategory = repairDisplayText(item.category || '家具');
+    const itemGroup = repairDisplayText(item.group || '家具');
     return `
       <div class="furniture-list-item ${pendingPlacementType === item.value ? 'active' : ''}" data-type="${item.value}">
         <div class="furniture-list-main">
-          <div class="furniture-list-title">${item.label || '未命名家具'}</div>
+          <div class="furniture-list-title">${itemLabel}</div>
           <div class="furniture-list-sub">
-            ${(item.category || '家具')} · ${(item.group || '家具')}
+            ${itemCategory} · ${itemGroup}
           </div>
         </div>
         <div class="furniture-list-meta">
@@ -937,7 +955,7 @@ function syncUI() {
     selectionText = `家具：${selectedFurniture()?.label || '无'}`;
   }
 
-  el.selectionInfo.textContent = selectionText;
+  el.selectionInfo.textContent = repairDisplayText(selectionText);
 
   // const roomOptions = state.rooms.map(r => `<option value="${r.id}">${r.name}</option>`).join('');
   // const furnitureOptions = getFurnitureCatalog().map(v => `<option value="${v.value}">${v.label}</option>`).join('');
