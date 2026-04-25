@@ -299,8 +299,20 @@ function getFurnitureCatalog() {
   return state?.options?.furniture_catalog || [];
 }
 
+function getOpeningCatalog() {
+  return state?.options?.opening_catalog || [];
+}
+
+function getLibraryCatalog() {
+  return [...getOpeningCatalog(), ...getFurnitureCatalog()];
+}
+
 function getFurnitureMeta(type) {
-  return getFurnitureCatalog().find(item => item.value === type) || null;
+  return getLibraryCatalog().find(item => item.value === type) || null;
+}
+
+function isPendingOpeningType(type = pendingPlacementType) {
+  return getOpeningCatalog().some(item => item.value === type);
 }
 
 function getFurnitureModelConfig(type) {
@@ -695,9 +707,10 @@ function setMessage(message, kind = null) {
 function renderFurnitureLibrary() {
   if (!state || !el.furnitureLibrary || !el.furnitureCategoryTabs) return;
 
-  const catalog = getFurnitureCatalog();
+  const catalog = getLibraryCatalog();
   const categories = [
     '全部',
+    '门窗',
     '浴室家具',
     '卧室家具',
     '客厅家具',
@@ -734,6 +747,7 @@ function renderFurnitureLibrary() {
   }
 
   el.furnitureLibrary.innerHTML = filtered.map(item => {
+    const isOpening = item.kind === 'opening';
     return `
       <div class="furniture-list-item ${pendingPlacementType === item.value ? 'active' : ''}" data-type="${item.value}">
         <div class="furniture-list-main">
@@ -743,8 +757,8 @@ function renderFurnitureLibrary() {
           </div>
         </div>
         <div class="furniture-list-meta">
-          ${Number(item.width || 1).toFixed(1)}m × ${Number(item.depth || 1).toFixed(1)}m
-          ${item.wallMount ? '<span class="wall-mount-pill">可上墙</span>' : ''}
+          ${Number(item.width || 1).toFixed(1)}m × ${Number((isOpening ? item.height : item.depth) || 1).toFixed(1)}m
+          ${(item.wallMount || isOpening) ? '<span class="wall-mount-pill">墙面</span>' : ''}
         </div>
       </div>
     `;
@@ -753,7 +767,7 @@ function renderFurnitureLibrary() {
   el.furnitureLibrary.querySelectorAll('.furniture-list-item').forEach(card => {
     card.onclick = () => {
       const type = card.dataset.type;
-      preferredFurnitureType = type;
+      if (!isPendingOpeningType(type)) preferredFurnitureType = type;
       pendingPlacementType = pendingPlacementType === type ? null : type;
 
       updatePlacementHint();
@@ -763,9 +777,14 @@ function renderFurnitureLibrary() {
 
       if (pendingPlacementType) {
         const meta = getFurnitureMeta(type);
-        setMessage(meta?.wallMount
-          ? `已选中${meta?.label || '家具'}，请点击 2D 房间边线或 3D 墙面进行上墙摆放`
-          : `已选中${meta?.label || '家具'}，请点击 2D 或 3D 场景中的房间位置放置`, 'info');
+        setMessage(
+          meta?.kind === 'opening'
+            ? `已选中${meta?.label || '门窗'}，请点击 2D 房间边线或 3D 墙面放置`
+            : meta?.wallMount
+              ? `已选中${meta?.label || '家具'}，请点击 2D 房间边线或 3D 墙面进行上墙摆放`
+              : `已选中${meta?.label || '家具'}，请点击 2D 或 3D 场景中的房间位置放置`,
+          'info'
+        );
       }
     };
   });
@@ -778,6 +797,11 @@ function updatePlacementHint() {
   if (!pendingPlacementType || !meta) {
     el.placementHint.textContent = '当前未进入待放置状态';
     el.placementHint.classList.remove('active');
+    return;
+  }
+  if (meta.kind === 'opening') {
+    el.placementHint.textContent = `待放置：${meta.label} · 点击 2D 房间边线或 3D 墙面放置`;
+    el.placementHint.classList.add('active');
     return;
   }
   el.placementHint.textContent = meta.wallMount
@@ -2230,7 +2254,10 @@ function onThreePointerMove(event) {
   if (pendingPlacementType) {
     const meta = getFurnitureMeta(pendingPlacementType);
     if (!meta) return;
-    if (meta.wallMount) {
+    if (meta.kind === 'opening') {
+      const wallHit = threeWallHit(event);
+      previewState.hoverPlacement = wallHit ? { room: wallHit.room, x: wallHit.point.x, y: wallHit.point.z, wall: wallHit.wall, wall_offset: wallHit.offset, placement: 'opening' } : null;
+    } else if (meta.wallMount) {
       const wallHit = threeWallHit(event);
       previewState.hoverPlacement = wallHit ? { room: wallHit.room, x: wallHit.point.x, y: wallHit.point.z, wall: wallHit.wall, wall_offset: wallHit.offset, placement: 'wall' } : null;
     } else {
@@ -2264,6 +2291,11 @@ async function onThreePointerUp(event) {
   if (pendingPlacementType) {
     const meta = getFurnitureMeta(pendingPlacementType);
     if (!meta) return;
+    if (meta.kind === 'opening') {
+      const wallHit = threeWallHit(event);
+      if (wallHit) await placePendingOpeningOnWall(wallHit.room.id, wallHit.wall, wallHit.offset);
+      return;
+    }
     if (meta.wallMount) {
       const wallHit = threeWallHit(event);
       if (wallHit) await placePendingFurnitureOnWall(wallHit.room.id, wallHit.wall, wallHit.offset);
@@ -2340,6 +2372,37 @@ async function placePendingFurnitureOnWall(roomId, wall, wallOffset) {
   }
 }
 
+async function placePendingOpeningOnWall(roomId, wall, wallOffset) {
+  const meta = getFurnitureMeta(pendingPlacementType);
+  const room = state?.rooms?.find(r => r.id === roomId);
+  if (!meta || meta.kind !== 'opening' || !room) return;
+  const offset = clampWallOffset(room, wall, wallOffset);
+  const data = await request('/api/opening', {
+    method: 'POST',
+    body: JSON.stringify({
+      type: meta.value,
+      room_id: roomId,
+      wall,
+      offset: +offset.toFixed(2),
+      width: meta.width,
+      height: meta.height,
+      sill: meta.sill,
+      color: meta.color,
+      material: meta.material,
+    })
+  });
+  if (data.item) {
+    selected = { type: 'opening', id: data.item.id };
+    pendingPlacementType = null;
+    previewState.hoverPlacement = null;
+    previewState.snapLines = [];
+    previewState.collision = false;
+    syncUI();
+    render2D();
+    render3D();
+  }
+}
+
 async function placePendingFurnitureAt(x, y, roomId) {
   const meta = getFurnitureMeta(pendingPlacementType);
   if (!meta || !roomId) return;
@@ -2385,7 +2448,10 @@ el.planCanvas.addEventListener('mousedown', evt => {
       const v = getViewport();
       const x = fromCanvasX(point.x, v);
       const y = fromCanvasY(point.y, v);
-      if (meta.wallMount) {
+      if (meta.kind === 'opening') {
+        const wallHit = nearestWallFromPoint(room, x, y);
+        placePendingOpeningOnWall(room.id, wallHit.wall, wallHit.offset);
+      } else if (meta.wallMount) {
         const wallHit = nearestWallFromPoint(room, x, y);
         placePendingFurnitureOnWall(room.id, wallHit.wall, wallHit.offset);
       } else {
@@ -2450,7 +2516,11 @@ el.planCanvas.addEventListener('mousemove', evt => {
     const meta = getFurnitureMeta(pendingPlacementType);
     const room = hitRoom(point.x, point.y);
     if (room && meta) {
-      if (meta.wallMount) {
+      if (meta.kind === 'opening') {
+        const wallHit = nearestWallFromPoint(room, rx, ry);
+        const p = wallPlacementToWorld(room, wallHit.wall, wallHit.offset, meta.sill || 0.9);
+        previewState.hoverPlacement = { room, x: p.x, y: p.y, wall: wallHit.wall, wall_offset: wallHit.offset, placement: 'opening' };
+      } else if (meta.wallMount) {
         const wallHit = nearestWallFromPoint(room, rx, ry);
         const p = wallPlacementToWorld(room, wallHit.wall, wallHit.offset, meta.defaultMountHeight || meta.yOffset || 1.5);
         previewState.hoverPlacement = { room, x: p.x, y: p.y, wall: wallHit.wall, wall_offset: wallHit.offset, placement: 'wall' };
@@ -2990,7 +3060,7 @@ function localizeStaticText() {
   setText('floorplanStatusText', '等待操作...');
   setText('selectionInfo', '未选中');
 
-  setPlaceholder('commandInput', '输入中文指令，例如：把卧室墙高改为四米');
+  setPlaceholder('commandInput', '例如：把卧室墙高改为四米');
   setPlaceholder('aiFloorplanInput', '输入户型描述，如：两室一厅、南北通透户型');
   setPlaceholder('roomNameInput', '输入房间名称');
   setPlaceholder('openingNameInput', '输入门窗名称，如：客厅窗');

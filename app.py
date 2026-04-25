@@ -799,6 +799,36 @@ class GameState:
             "options": {
                 "walls": [{"value": key, "label": WALL_LABELS[key]} for key in WALLS],
                 "opening_types": [{"value": k, "label": v} for k, v in OPENING_TYPE_LABELS.items()],
+                "opening_catalog": [
+                    {
+                        "kind": "opening",
+                        "value": "door",
+                        "label": "门",
+                        "category": "门窗",
+                        "group": "门洞",
+                        "width": 0.9,
+                        "depth": 0.2,
+                        "height": 2.1,
+                        "sill": 0.0,
+                        "color": "#8b6a4d",
+                        "material": "木纹",
+                        "tags": ["门", "房门", "开门"],
+                    },
+                    {
+                        "kind": "opening",
+                        "value": "window",
+                        "label": "窗",
+                        "category": "门窗",
+                        "group": "窗洞",
+                        "width": 1.4,
+                        "depth": 0.2,
+                        "height": 1.5,
+                        "sill": 0.9,
+                        "color": "#79bdf8",
+                        "material": "玻璃",
+                        "tags": ["窗", "窗户", "开窗"],
+                    },
+                ],
                 "room_materials": MATERIAL_OPTIONS,
                 "furniture_catalog": [
                     {
@@ -945,6 +975,60 @@ def opening_default_name(opening_type: str, room: Room, idx: int | None = None) 
     suffix = f"{idx}" if idx is not None else ""
     base = "门" if opening_type == "door" else "窗"
     return f"{room.name}{base}{suffix}"
+
+
+def choose_opening_wall(room: Room, opening_type: str) -> str:
+    existing = [item for item in STATE.openings if item.room_id == room.id and item.type == opening_type]
+    preferred = "top" if room.width >= room.depth else "right"
+    if not existing:
+        return preferred
+
+    wall_counts = {wall: 0 for wall in WALLS}
+    for item in existing:
+        wall_counts[item.wall] = wall_counts.get(item.wall, 0) + 1
+    return min(WALLS, key=lambda wall: (wall_counts.get(wall, 0), 0 if wall == preferred else 1))
+
+
+def choose_opening_offset(room: Room, wall: str, opening_type: str, width: float) -> float:
+    wall_len = wall_length(room, wall)
+    candidates = [item for item in STATE.openings if item.room_id == room.id and item.wall == wall]
+    if not candidates:
+        return clamp((wall_len - width) / 2, 0.0, max(0.0, wall_len - width))
+
+    ordered = sorted(candidates, key=lambda item: item.offset)
+    margin = 0.2
+    cursor = margin
+    for item in ordered:
+        if cursor + width <= item.offset - margin:
+            return clamp(cursor, 0.0, max(0.0, wall_len - width))
+        cursor = max(cursor, item.offset + item.width + margin)
+    return clamp(cursor, 0.0, max(0.0, wall_len - width))
+
+
+def auto_place_opening(
+    room: Room,
+    opening_type: str,
+    width: float,
+    name: Optional[str] = None,
+    height: Optional[float] = None,
+    sill: Optional[float] = None,
+    color: Optional[str] = None,
+    material: Optional[str] = None,
+) -> tuple[bool, str, Optional[Opening]]:
+    wall = choose_opening_wall(room, opening_type)
+    offset = choose_opening_offset(room, wall, opening_type, float(width))
+    return add_opening(
+        room=room,
+        opening_type=opening_type,
+        wall=wall,
+        offset=offset,
+        width=width,
+        name=name,
+        height=height,
+        sill=sill,
+        color=color,
+        material=material,
+    )
 
 
 def clamp_opening(opening: Opening) -> None:
@@ -1309,6 +1393,25 @@ def detect_furniture_type(text: str) -> Optional[str]:
     return None
 
 
+def detect_opening_type(text: str) -> Optional[str]:
+    if any(token in text for token in ["窗户", "窗"]):
+        return "window"
+    if "门" in text:
+        return "door"
+    return None
+
+
+def extract_quantity(text: str) -> int:
+    match = re.search(r"(\d+)\s*(?:个|扇|樘)?", text)
+    if match:
+        return max(1, int(match.group(1)))
+    if any(token in text for token in ["两", "俩", "二"]):
+        return 2
+    if any(token in text for token in ["三", "仨"]):
+        return 3
+    return 1
+
+
 ROOM_NAME_EN_MAP = {
     "bedroom": "卧室",
     "masterbedroom": "主卧",
@@ -1626,10 +1729,35 @@ def parse_command(text: str, selected_context: Optional[Dict] = None) -> Dict:
     room = detect_room_by_alias(normalized) or selected.get("room")
     furniture_type = detect_furniture_type(normalized)
     furniture_item = detect_furniture_item(normalized, room=room, selected_context=selected_context)
-    opening_type = "window" if "窗" in normalized else ("door" if "门" in normalized else None)
+    opening_type = detect_opening_type(normalized)
     opening_item = detect_opening(normalized, room=room, opening_type=opening_type, selected_context=selected_context)
     color = detect_color(normalized)
     action_type = infer_action_type(normalized)
+    quantity = extract_quantity(normalized)
+
+    if room and opening_type and action_type == "add":
+        width = extract_metric_value(normalized, PROPERTY_ALIASES["width"]) or (1.4 if opening_type == "window" else 0.9)
+        height = extract_metric_value(normalized, PROPERTY_ALIASES["height"]) or (1.5 if opening_type == "window" else 2.1)
+        sill = extract_metric_value(normalized, PROPERTY_ALIASES["sill"])
+        if opening_type == "door" and sill is None:
+            sill = 0.0
+        if opening_type == "window" and sill is None:
+            sill = 0.9
+
+        messages: List[str] = []
+        for _ in range(max(1, quantity)):
+            ok, msg, _ = auto_place_opening(
+                room=room,
+                opening_type=opening_type,
+                width=width,
+                height=height,
+                sill=sill,
+                color=color,
+            )
+            if not ok:
+                return {"ok": False, "message": msg, "action": None, "changed": bool(messages)}
+            messages.append(msg)
+        return {"ok": True, "message": " ".join(messages), "action": None, "changed": True}
 
     if room and furniture_type and action_type == "add":
         ok, msg, _ = add_furniture(room, furniture_type, color=color)
