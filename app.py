@@ -1309,50 +1309,256 @@ def detect_furniture_type(text: str) -> Optional[str]:
     return None
 
 
-def call_ark_chat_json(system_prompt: str, user_prompt: str, max_tokens: int = 260) -> Dict:
-    prompt = (user_prompt or '').strip()
-    transcript = prompt.replace('请将这段中文语音转成标准中文家装指令：', '').strip()
-    if not transcript:
-        return {
-            "command": "",
-            "reason": "未识别到有效语音内容。",
-            "confidence": "low",
-        }
-    return normalize_voice_command_with_llm(transcript)
+ROOM_NAME_EN_MAP = {
+    "bedroom": "卧室",
+    "masterbedroom": "主卧",
+    "guestbedroom": "次卧",
+    "livingroom": "客厅",
+    "diningroom": "餐厅",
+    "kitchen": "厨房",
+    "bathroom": "卫生间",
+    "restroom": "卫生间",
+    "toilet": "卫生间",
+    "balcony": "阳台",
+    "study": "书房",
+    "office": "书房",
+    "room": "房间",
+    "livingdiningkitchen": "客餐厨",
+    "livingdining": "客餐厅",
+}
+
+ROOM_ALIASES = {
+    "客厅": ["客厅", "客餐厅", "客餐厨", "起居室", "living room", "living"],
+    "卧室": ["卧室", "主卧", "次卧", "bedroom", "master bedroom", "guest bedroom"],
+    "阳台": ["阳台", "balcony"],
+    "厨房": ["厨房", "厨", "kitchen"],
+    "卫生间": ["卫生间", "浴室", "厕所", "洗手间", "bathroom", "toilet", "restroom"],
+    "书房": ["书房", "office", "study"],
+    "餐厅": ["餐厅", "饭厅", "dining room", "dining"],
+}
+
+ACTION_SYNONYMS = {
+    "add": ["添加", "新增", "加", "放", "摆放", "放入", "来一个"],
+    "delete": ["删除", "移除", "去掉", "拿掉", "取消"],
+    "update": ["修改", "调整", "改成", "改为", "设置为", "设为", "变成", "换成"],
+    "move": ["移动", "移到", "挪到", "放到", "搬到"],
+    "rotate": ["旋转", "转动", "转向"],
+}
+
+PROPERTY_ALIASES = {
+    "height": ["高度", "高", "墙高", "层高", "墙面高度", "窗高", "门高", "窗户高度", "门高度"],
+    "width": ["宽度", "宽", "门宽", "窗宽"],
+    "depth": ["深度", "进深", "长度", "长"],
+    "sill": ["窗台高度", "窗台高"],
+    "wall_color": ["墙颜色", "墙面颜色", "墙色", "墙面改成"],
+    "floor_color": ["地板颜色", "地面颜色", "地砖颜色", "地板改成", "地面改成"],
+    "material": ["材质", "材料"],
+    "rotation": ["角度", "旋转", "朝向"],
+}
+
+VOICE_TEXT_REPLACEMENTS = {
+    "二弟": "2D",
+    "二维": "2D",
+    "三弟": "3D",
+    "三维": "3D",
+    "第一视角": "第一人称视角",
+    "第一人称模式": "第一人称视角",
+    "窗台高": "窗台高度",
+    "墙高": "墙面高度",
+    "地砖": "地板",
+}
 
 
-def normalize_voice_command_with_llm(transcript: str) -> Dict:
-    transcript = (transcript or '').strip()
-    if not transcript:
-        return {
-            "command": "",
-            "reason": "未识别到有效语音内容。",
-            "confidence": "low",
-        }
-
-    normalized = transcript
-    replacements = {
-        '二笛': '2D',
-        '二维': '2D',
-        '三笛': '3D',
-        '三维': '3D',
-        '第一视角': '第一人称视角',
-        '第一人称模式': '第一人称视角',
-        '窗台高': '窗台高度',
-        '墙高': '墙面高度',
-        '地砖': '地板',
-    }
-    for src, target in replacements.items():
-        normalized = normalized.replace(src, target)
-
-    return {
-        "command": normalized,
-        "reason": "已按中文规则标准化语音指令。",
-        "confidence": "high",
-    }
+def sanitize_token(value: str) -> str:
+    return re.sub(r"[^a-z0-9\u4e00-\u9fff]", "", (value or "").lower())
 
 
-def detect_opening(text: str, room: Optional[Room] = None, opening_type: Optional[str] = None) -> Optional[Opening]:
+def build_furniture_display_names() -> Dict[str, str]:
+    mapping: Dict[str, str] = {}
+    for alias, ftype in FURNITURE_ALIASES.items():
+        mapping.setdefault(ftype, alias)
+    return mapping
+
+
+FURNITURE_TYPE_DISPLAY_NAMES = build_furniture_display_names()
+
+
+def chinese_digit_to_number(text: str) -> float:
+    if not text:
+        return 0.0
+    digit_map = {"零": 0, "一": 1, "二": 2, "两": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9}
+    unit_map = {"十": 10, "百": 100, "千": 1000}
+    if "点" in text:
+        integer_part, decimal_part = text.split("点", 1)
+        integer_value = int(chinese_digit_to_number(integer_part)) if integer_part else 0
+        decimal_digits = "".join(str(digit_map.get(ch, "")) for ch in decimal_part if ch in digit_map)
+        return float(f"{integer_value}.{decimal_digits or '0'}")
+
+    total = 0
+    current = 0
+    for ch in text:
+        if ch in digit_map:
+            current = digit_map[ch]
+        elif ch in unit_map:
+            if current == 0:
+                current = 1
+            total += current * unit_map[ch]
+            current = 0
+    return float(total + current)
+
+
+def replace_chinese_numbers(text: str) -> str:
+    def repl(match: re.Match) -> str:
+        token = match.group(0)
+        try:
+            value = chinese_digit_to_number(token)
+            if value.is_integer():
+                return str(int(value))
+            return str(value)
+        except Exception:
+            return token
+
+    return re.sub(r"[零一二两三四五六七八九十百千点]+", repl, text)
+
+
+def normalize_command_text(text: str, source: str = "typed") -> str:
+    normalized = (text or "").strip()
+    if not normalized:
+        return ""
+    normalized = normalized.replace("，", " ").replace("。", " ").replace("：", " ").replace("；", " ")
+    normalized = normalized.replace("　", " ").replace(",", " ").replace("/", " ")
+    normalized = re.sub(r"\s+", " ", normalized).strip()
+    normalized = replace_chinese_numbers(normalized)
+    if source == "voice":
+        for src, target in VOICE_TEXT_REPLACEMENTS.items():
+            normalized = normalized.replace(src, target)
+    return normalized
+
+
+def localize_room_name(name: str, index: int = 1) -> str:
+    raw = (name or "").strip()
+    if not raw:
+        return f"房间{index}"
+    if re.search(r"[\u4e00-\u9fff]", raw):
+        return raw
+    token = sanitize_token(raw)
+    if token in ROOM_NAME_EN_MAP:
+        return ROOM_NAME_EN_MAP[token]
+    for key, value in ROOM_NAME_EN_MAP.items():
+        if key in token:
+            return value
+    return f"房间{index}"
+
+
+def localize_furniture_label(label: str, furniture_type: str) -> str:
+    raw = (label or "").strip()
+    if raw and re.search(r"[\u4e00-\u9fff]", raw):
+        return raw
+    return FURNITURE_TYPE_DISPLAY_NAMES.get(furniture_type, "家具")
+
+
+def localize_opening_name(name: str, opening_type: str, room_name: str, index: int = 1) -> str:
+    raw = (name or "").strip()
+    if raw and re.search(r"[\u4e00-\u9fff]", raw):
+        return raw
+    suffix = "窗" if opening_type == "window" else "门"
+    if room_name:
+        return f"{room_name}{suffix}"
+    return f"{suffix}{index}"
+
+
+def detect_room_by_alias(text: str) -> Optional[Room]:
+    room = detect_room(text)
+    if room:
+        return room
+    lowered = text.lower()
+    for canonical, aliases in ROOM_ALIASES.items():
+        if any(alias.lower() in lowered for alias in aliases):
+            for candidate in STATE.rooms:
+                if canonical in candidate.name:
+                    return candidate
+    return None
+
+
+def get_selected_entities(selected_context: Optional[Dict]) -> Dict[str, Optional[object]]:
+    result = {"room": None, "opening": None, "furniture": None}
+    if not isinstance(selected_context, dict):
+        return result
+    selected_type = selected_context.get("type")
+    selected_id = selected_context.get("id")
+    if selected_type == "room":
+        result["room"] = room_by_id(selected_id)
+    elif selected_type == "opening":
+        opening = opening_by_id(selected_id)
+        result["opening"] = opening
+        if opening:
+            result["room"] = room_by_id(opening.room_id)
+    elif selected_type == "furniture":
+        furniture = furniture_by_id(selected_id)
+        result["furniture"] = furniture
+        if furniture:
+            result["room"] = room_by_id(furniture.room_id)
+    return result
+
+
+def extract_metric_value(text: str, keywords: List[str]) -> Optional[float]:
+    keyword_group = "|".join(re.escape(word) for word in keywords)
+    patterns = [
+        rf"(?:{keyword_group})(?:改成|改为|调整为|设置为|设为|到)?\s*(-?\d+(?:\.\d+)?)\s*米?",
+        rf"(-?\d+(?:\.\d+)?)\s*米?(?:的)?(?:{keyword_group})",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, text)
+        if match:
+            return float(match.group(1))
+    return None
+
+
+def extract_rotation_value(text: str) -> Optional[float]:
+    match = re.search(r"(?:旋转|角度|朝向)(?:改成|改为|调整为|设置为|设为|到)?\s*(-?\d+(?:\.\d+)?)", text)
+    if match:
+        return float(match.group(1))
+    return None
+
+
+def extract_target_room(text: str) -> Optional[Room]:
+    move_markers = ["移到", "移动到", "挪到", "搬到", "放到"]
+    for marker in move_markers:
+        if marker in text:
+            trailing = text.split(marker, 1)[1]
+            return detect_room_by_alias(trailing)
+    return None
+
+
+def infer_action_type(text: str) -> str:
+    for action, words in ACTION_SYNONYMS.items():
+        if any(word in text for word in words):
+            return action
+    return "update"
+
+
+def detect_client_action(text: str) -> Optional[Dict[str, str]]:
+    normalized = (text or "").strip().lower()
+    if not normalized:
+        return None
+    if "第一人称" in normalized and any(token in normalized for token in ["进入", "开启", "切换到", "打开"]):
+        return {"type": "enter_first_person"}
+    if "第一人称" in normalized and any(token in normalized for token in ["退出", "关闭", "离开"]):
+        return {"type": "exit_first_person"}
+    if any(token in normalized for token in ["切换到2d", "切换到 2d", "2d视图", "2d模式", "二维视图", "平面视图"]):
+        return {"type": "show_2d"}
+    if any(token in normalized for token in ["切换到3d", "切换到 3d", "3d视图", "3d模式", "三维视图", "立体视图"]):
+        return {"type": "show_3d"}
+    return None
+
+
+def detect_opening(text: str, room: Optional[Room] = None, opening_type: Optional[str] = None, selected_context: Optional[Dict] = None) -> Optional[Opening]:
+    selected = get_selected_entities(selected_context)
+    if selected.get("opening"):
+        opening = selected["opening"]
+        if (not room or opening.room_id == room.id) and (not opening_type or opening.type == opening_type):
+            return opening
+
     candidates = STATE.openings
     if room:
         candidates = [item for item in candidates if item.room_id == room.id]
@@ -1363,154 +1569,198 @@ def detect_opening(text: str, room: Optional[Room] = None, opening_type: Optiona
         if opening.name and opening.name in text:
             return opening
 
-    if opening_type == 'window' or '窗' in text:
-        return next((item for item in candidates if item.type == 'window'), None)
-    if opening_type == 'door' or '门' in text:
-        return next((item for item in candidates if item.type == 'door'), None)
+    if opening_type == "window" or "窗" in text:
+        return next((item for item in candidates if item.type == "window"), None)
+    if opening_type == "door" or "门" in text:
+        return next((item for item in candidates if item.type == "door"), None)
     return candidates[0] if candidates else None
 
 
-def detect_client_action(text: str) -> Optional[Dict[str, str]]:
-    normalized = (text or '').strip().lower()
+def detect_furniture_item(text: str, room: Optional[Room] = None, selected_context: Optional[Dict] = None) -> Optional[Furniture]:
+    selected = get_selected_entities(selected_context)
+    if selected.get("furniture"):
+        furniture = selected["furniture"]
+        if not room or furniture.room_id == room.id:
+            return furniture
+
+    furniture_type = detect_furniture_type(text)
+    candidates = STATE.furnitures
+    if room:
+        candidates = [item for item in candidates if item.room_id == room.id]
+
+    for item in candidates:
+        if item.label and item.label in text:
+            return item
+    if furniture_type:
+        return next((item for item in candidates if item.type == furniture_type), None)
+    return candidates[0] if candidates else None
+
+
+def parse_command(text: str, selected_context: Optional[Dict] = None) -> Dict:
+    normalized = normalize_command_text(text, "typed")
     if not normalized:
-        return None
-    if '第一人称' in normalized and any(token in normalized for token in ['进入', '开启', '切换到', '打开']):
-        return {"type": "enter_first_person"}
-    if '第一人称' in normalized and any(token in normalized for token in ['退出', '关闭', '离开']):
-        return {"type": "exit_first_person"}
-    if any(token in normalized for token in ['切换到2d', '切换到 2d', '2d视图', '2d模式', '二维视图', '平面视图']):
-        return {"type": "show_2d"}
-    if any(token in normalized for token in ['切换到3d', '切换到 3d', '3d视图', '3d模式', '三维视图', '立体视图']):
-        return {"type": "show_3d"}
-    return None
+        return {"ok": False, "message": "请输入指令。", "action": None, "changed": False}
 
-
-def apply_command(text: str) -> str:
-    text = text.strip()
-    if not text:
-        return '请输入指令。'
-
-    action = detect_client_action(text)
-    if action:
-        action_messages = {
-            'enter_first_person': '已进入第一人称视角。',
-            'exit_first_person': '已退出第一人称视角。',
-            'show_2d': '已切换到 2D 视图。',
-            'show_3d': '已切换到 3D 视图。',
+    client_action = detect_client_action(normalized)
+    if client_action:
+        message_map = {
+            "enter_first_person": "已进入第一人称视角。",
+            "exit_first_person": "已退出第一人称视角。",
+            "show_2d": "已切换到 2D 视图。",
+            "show_3d": "已切换到 3D 视图。",
         }
-        return action_messages.get(action['type'], '已执行指令。')
+        return {"ok": True, "message": message_map[client_action["type"]], "action": client_action, "changed": False}
 
-    if '撤销' in text:
-        return STATE.undo()
-    if '重做' in text or '恢复' in text:
-        return STATE.redo()
-
-    if '显示网格' in text or '打开网格' in text:
+    if "撤销" in normalized:
+        return {"ok": True, "message": STATE.undo(), "action": None, "changed": False}
+    if "重做" in normalized or "恢复" in normalized:
+        return {"ok": True, "message": STATE.redo(), "action": None, "changed": False}
+    if "显示网格" in normalized or "打开网格" in normalized:
         STATE.show_grid = True
-        return '已显示网格。'
-    if '隐藏网格' in text or '关闭网格' in text:
+        return {"ok": True, "message": "已显示网格。", "action": None, "changed": True}
+    if "隐藏网格" in normalized or "关闭网格" in normalized:
         STATE.show_grid = False
-        return '已隐藏网格。'
+        return {"ok": True, "message": "已隐藏网格。", "action": None, "changed": True}
 
-    room = detect_room(text)
-    ftype = detect_furniture_type(text)
-    color = detect_color(text)
+    selected = get_selected_entities(selected_context)
+    room = detect_room_by_alias(normalized) or selected.get("room")
+    furniture_type = detect_furniture_type(normalized)
+    furniture_item = detect_furniture_item(normalized, room=room, selected_context=selected_context)
+    opening_type = "window" if "窗" in normalized else ("door" if "门" in normalized else None)
+    opening_item = detect_opening(normalized, room=room, opening_type=opening_type, selected_context=selected_context)
+    color = detect_color(normalized)
+    action_type = infer_action_type(normalized)
 
-    if '添加房间' in text or ('新建' in text and '房间' in text):
-        width = parse_distance(text, 3.0)
-        all_nums = re.findall(r'(\d+(?:\.\d+)?)\s*米?', text)
-        depth = float(all_nums[1]) if len(all_nums) > 1 else width
-        ok, msg, _ = add_room(f'房间{len(STATE.rooms)+1}', 0.5 + len(STATE.rooms) * 0.6, 0.5 + len(STATE.rooms) * 0.6, width, depth)
-        return msg
+    if room and furniture_type and action_type == "add":
+        ok, msg, _ = add_furniture(room, furniture_type, color=color)
+        return {"ok": ok, "message": msg, "action": None, "changed": ok}
 
-    if room and any(word in text for word in ['添加窗', '加窗', '新增窗', '开窗', '添加门', '加门', '新增门']):
-        wall = 'top'
-        if '左墙' in text:
-            wall = 'left'
-        elif '右墙' in text:
-            wall = 'right'
-        elif '下墙' in text or '底墙' in text:
-            wall = 'bottom'
-        opening_type = 'window' if '窗' in text else 'door'
-        ok, msg, _ = add_opening(room, opening_type, wall, 0.4, parse_distance(text, 1.2 if opening_type == 'window' else 0.9))
-        return msg
+    if furniture_item and action_type == "delete":
+        msg = delete_furniture(furniture_item)
+        return {"ok": True, "message": msg, "action": None, "changed": True}
 
-    if room and ftype and any(word in text for word in ['添加', '摆放', '放入']):
-        ok, msg, _ = add_furniture(room, ftype, color=color)
-        return msg
+    if furniture_item and action_type == "move":
+        target_room = extract_target_room(normalized)
+        if not target_room:
+            return {"ok": False, "message": "没有识别到要移动到哪个房间。", "action": None, "changed": False}
+        ok, msg = update_furniture(furniture_item, {"room_id": target_room.id, "x": target_room.x + 0.3, "y": target_room.y + 0.3})
+        return {"ok": ok, "message": msg, "action": None, "changed": ok}
 
-    if room and any(word in text for word in ['改', '修改', '调整', '变成', '设置']) and any(word in text for word in ['宽', '深', '高', '墙', '地板', '材质', '颜色']):
-        width_m = re.search(r'宽(?:度)?(?:改成|调整为|设置为|为)?\s*(\d+(?:\.\d+)?)\s*米?', text)
-        depth_m = re.search(r'(?:深度|进深)(?:改成|调整为|设置为|为)?\s*(\d+(?:\.\d+)?)\s*米?', text)
-        height_m = re.search(r'(?:墙高|层高|高度|墙面高度)(?:改成|调整为|设置为|为)?\s*(\d+(?:\.\d+)?)\s*米?', text)
+    if furniture_item and (color or action_type in {"update", "rotate"}):
         payload = {}
-        if width_m:
-            payload['width'] = float(width_m.group(1))
-        if depth_m:
-            payload['depth'] = float(depth_m.group(1))
-        if height_m:
-            payload['height'] = float(height_m.group(1))
         if color:
-            if any(word in text for word in ['地板', '地面', '地砖']):
-                payload['floor_color'] = color
-            else:
-                payload['wall_color'] = color
-        for keyword in ['乳胶漆', '木饰面', '瓷砖', '石材', '玻璃', '混凝土']:
-            if keyword in text:
-                payload['wall_material'] = keyword
+            payload["color"] = color
+        rotation = extract_rotation_value(normalized)
+        if rotation is not None:
+            payload["rotation"] = rotation
+        width = extract_metric_value(normalized, PROPERTY_ALIASES["width"])
+        depth = extract_metric_value(normalized, PROPERTY_ALIASES["depth"])
+        if width is not None:
+            payload["width"] = width
+        if depth is not None:
+            payload["depth"] = depth
+        for material in MATERIAL_OPTIONS:
+            if material and material in normalized:
+                payload["material"] = material
+                break
+        if payload:
+            ok, msg = update_furniture(furniture_item, payload)
+            return {"ok": ok, "message": msg, "action": None, "changed": ok}
+
+    room_property_requested = any(
+        extract_metric_value(normalized, PROPERTY_ALIASES[key]) is not None
+        for key in ["width", "depth", "height", "sill"]
+    ) or color is not None or any(material and material in normalized for material in MATERIAL_OPTIONS)
+
+    if room and (room_property_requested or any(token in normalized for token in ["墙", "地板", "地面", "地砖"])):
+        payload = {}
+        width = extract_metric_value(normalized, PROPERTY_ALIASES["width"])
+        depth = extract_metric_value(normalized, PROPERTY_ALIASES["depth"])
+        height = extract_metric_value(normalized, PROPERTY_ALIASES["height"])
+        if width is not None:
+            payload["width"] = width
+        if depth is not None:
+            payload["depth"] = depth
+        if height is not None:
+            payload["height"] = height
+        if color:
+            if any(token in normalized for token in ["地板", "地面", "地砖"]):
+                payload["floor_color"] = color
+            if any(token in normalized for token in ["墙", "墙面"]):
+                payload.setdefault("wall_color", color)
+        for material in MATERIAL_OPTIONS:
+            if material and material in normalized:
+                payload["wall_material"] = material
                 break
         if payload:
             ok, msg = update_room(room, payload)
-            return msg
+            return {"ok": ok, "message": msg, "action": None, "changed": ok}
 
-    opening_type = 'window' if '窗' in text else ('door' if '门' in text else None)
-    opening = detect_opening(text, room=room, opening_type=opening_type)
-    if opening and any(word in text for word in ['改', '修改', '调整', '设置']) and any(word in text for word in ['窗高', '窗户高度', '门高', '高度', '窗台高度', '宽度', '颜色', '材质']):
+    if opening_item:
         payload = {}
-        height_m = re.search(r'(?:窗户高度|窗高|门高|门高度|高度)(?:改成|调整为|设置为|为)?\s*(\d+(?:\.\d+)?)\s*米?', text)
-        sill_m = re.search(r'(?:窗台高度|窗台高)(?:改成|调整为|设置为|为)?\s*(\d+(?:\.\d+)?)\s*米?', text)
-        width_m = re.search(r'(?:宽度|门宽|窗宽)(?:改成|调整为|设置为|为)?\s*(\d+(?:\.\d+)?)\s*米?', text)
-        if height_m:
-            payload['height'] = float(height_m.group(1))
-        if sill_m:
-            payload['sill'] = float(sill_m.group(1))
-        if width_m:
-            payload['width'] = float(width_m.group(1))
+        height = extract_metric_value(normalized, ["窗户高度", "窗高", "门高", "门高度", "高度"])
+        sill = extract_metric_value(normalized, PROPERTY_ALIASES["sill"])
+        width = extract_metric_value(normalized, ["宽度", "窗宽", "门宽"])
+        if height is not None:
+            payload["height"] = height
+        if sill is not None:
+            payload["sill"] = sill
+        if width is not None:
+            payload["width"] = width
         if color:
-            payload['color'] = color
-        for keyword in ['木质', '玻璃', '金属']:
-            if keyword in text:
-                payload['material'] = keyword
+            payload["color"] = color
+        for material in MATERIAL_OPTIONS:
+            if material and material in normalized:
+                payload["material"] = material
                 break
         if payload:
-            ok, msg = update_opening(opening, payload)
-            return msg
+            ok, msg = update_opening(opening_item, payload)
+            return {"ok": ok, "message": msg, "action": None, "changed": ok}
 
-    if ftype and any(word in text for word in ['删除', '移除']):
-        if room:
-            item = next((f for f in STATE.furnitures if f.type == ftype and f.room_id == room.id), None)
-            if item:
-                return delete_furniture(item)
-            return f'{room.name}里没有对应家具。'
-        item = next((f for f in STATE.furnitures if f.type == ftype), None)
-        if item:
-            return delete_furniture(item)
-        return '没有找到要删除的家具。'
+    return {
+        "ok": False,
+        "message": "暂时没有理解这条中文指令。可以试试修改房间高度、给客厅添加家具、删除已有家具、修改窗户高度或切换视图。",
+        "action": None,
+        "changed": False,
+    }
 
-    if ftype and color:
-        if room:
-            item = next((f for f in STATE.furnitures if f.type == ftype and f.room_id == room.id), None)
-            if item:
-                ok, msg = update_furniture(item, {'color': color})
-                return msg
-            return f'{room.name}里没有对应家具。'
-        item = next((f for f in STATE.furnitures if f.type == ftype), None)
-        if item:
-            ok, msg = update_furniture(item, {'color': color})
-            return msg
-        return '没有找到要修改的家具。'
 
-    return '暂时没有理解这条中文指令。可以试试：进入第一人称视角、切换到2D视图、把卧室墙高改成4米、把客厅窗户高度改成1.8米。'
+def execute_command(text: str, source: str = "typed", selected_context: Optional[Dict] = None) -> Dict:
+    normalized = normalize_command_text(text, source)
+    result = parse_command(normalized, selected_context=selected_context)
+    result["normalized_text"] = normalized
+    return result
+
+
+def call_ark_chat_json(system_prompt: str, user_prompt: str, max_tokens: int = 260) -> Dict:
+    prompt = (user_prompt or "").strip()
+    transcript = prompt.replace("请将这段中文语音转成标准中文家装指令：", "").strip()
+    if not transcript:
+        return {
+            "command": "",
+            "reason": "未识别到有效语音内容。",
+            "confidence": "low",
+        }
+    return normalize_voice_command_with_llm(transcript)
+
+
+def normalize_voice_command_with_llm(transcript: str) -> Dict:
+    normalized = normalize_command_text(transcript, "voice")
+    if not normalized:
+        return {
+            "command": "",
+            "reason": "未识别到有效语音内容。",
+            "confidence": "low",
+        }
+    return {
+        "command": normalized,
+        "reason": "已按中文规则标准化语音指令。",
+        "confidence": "high",
+    }
+
+
+def apply_command(text: str, selected_context: Optional[Dict] = None) -> str:
+    return execute_command(text, "typed", selected_context=selected_context)["message"]
 
 
 @app.route("/")
@@ -1528,6 +1778,7 @@ def api_state():
 def api_voice_command():
     payload = request.get_json(silent=True) or {}
     transcript = str(payload.get("transcript", "")).strip()
+    selected_context = payload.get("selected")
     if not transcript:
         return jsonify({"ok": False, "message": "未收到语音转写结果。", "state": STATE.to_dict()}), 400
 
@@ -1560,12 +1811,12 @@ def api_voice_command():
         })
 
     action = detect_client_action(normalized_command)
-    if "撤销" not in normalized_command and "重做" not in normalized_command and "恢复" not in normalized_command:
+    if not action and all(token not in normalized_command for token in ["撤销", "重做", "恢复"]):
         STATE.push_history()
-
-    STATE.message = apply_command(normalized_command)
+    result = execute_command(normalized_command, "voice", selected_context=selected_context)
+    STATE.message = result["message"]
     return jsonify({
-        "ok": True,
+        "ok": result.get("ok", True),
         "message": STATE.message,
         "transcript": transcript,
         "llm_command": normalized_command,
@@ -1580,13 +1831,18 @@ def api_voice_command():
 def api_command():
     payload = request.get_json(silent=True) or {}
     text = str(payload.get("command", "")).strip()
-    action = detect_client_action(text)
-    if text and ("撤销" not in text and "重做" not in text and "恢复" not in text):
+    selected_context = payload.get("selected")
+    normalized_text = normalize_command_text(text, "typed")
+    action = detect_client_action(normalized_text)
+    if text and not action and all(token not in normalized_text for token in ["撤销", "重做", "恢复"]):
         STATE.push_history()
-    STATE.message = apply_command(text)
+    result = execute_command(text, "typed", selected_context=selected_context)
+    STATE.message = result["message"]
     return jsonify({
         **STATE.to_dict(),
         "action": action,
+        "ok": result.get("ok", True),
+        "normalized_command": normalized_text,
     })
 
 
@@ -1618,11 +1874,13 @@ def api_import():
         STATE.openings = []
         
         # 导入房间
+        localized_room_names: Dict[str, str] = {}
         if "rooms" in payload:
-            for room_data in payload["rooms"]:
+            for index, room_data in enumerate(payload["rooms"], start=1):
+                localized_name = localize_room_name(room_data.get("name", ""), index)
                 room = Room(
                     id=room_data.get("id"),
-                    name=room_data.get("name", "房间"),
+                    name=localized_name,
                     x=room_data.get("x", 0),
                     y=room_data.get("y", 0),
                     width=room_data.get("width", 3),
@@ -1633,6 +1891,7 @@ def api_import():
                     wall_material=room_data.get("wall_material", "白色瓷砖")
                 )
                 STATE.rooms.append(room)
+                localized_room_names[room.id] = localized_name
         
         # 导入家具
         if "furnitures" in payload:
@@ -1647,10 +1906,11 @@ def api_import():
                     continue
 
                 meta = FURNITURE_DEFAULTS[furniture_type]
+                localized_label = localize_furniture_label(furniture_data.get("label", ""), furniture_type)
                 furniture = Furniture(
                     id=furniture_data.get("id") or next_id("furniture", STATE.furnitures),
                     type=furniture_type,
-                    label=furniture_data.get("label", meta.get("label", "家具")),
+                    label=localized_label or meta.get("label", "家具"),
                     room_id=furniture_data.get("room_id") or (STATE.rooms[0].id if STATE.rooms else None),
                     x=float(furniture_data.get("x", 0)),
                     y=float(furniture_data.get("y", 0)),
@@ -1675,12 +1935,14 @@ def api_import():
         
         # 导入门窗
         if "openings" in payload:
-            for opening_data in payload["openings"]:
+            for index, opening_data in enumerate(payload["openings"], start=1):
+                room_id = opening_data.get("room_id") or (STATE.rooms[0].id if STATE.rooms else None)
+                room_name = localized_room_names.get(room_id, room_by_id(room_id).name if room_id and room_by_id(room_id) else "")
                 opening = Opening(
                     id=opening_data.get("id"),
                     type=opening_data.get("type", "door"),
-                    name=opening_data.get("name", "门窗"),
-                    room_id=opening_data.get("room_id") or (STATE.rooms[0].id if STATE.rooms else None),
+                    name=localize_opening_name(opening_data.get("name", ""), opening_data.get("type", "door"), room_name, index),
+                    room_id=room_id,
                     wall=opening_data.get("wall", "top"),
                     offset=opening_data.get("offset", 0),
                     width=opening_data.get("width", 1),

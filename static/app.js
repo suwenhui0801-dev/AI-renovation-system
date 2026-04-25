@@ -817,7 +817,7 @@ async function request(url, options = {}) {
   syncUI();
   render2D();
   render3D();
-  afterStateUpdated();
+  afterStateUpdated(data.action || null);
   return data;
 }
 
@@ -874,6 +874,11 @@ function fillOpeningForm(opening) {
   el.openingWidthInput.value = opening.width;
   if (el.openingHeightInput) el.openingHeightInput.value = Number(opening.height || 1.5).toFixed(1);
   if (el.openingSillInput) el.openingSillInput.value = Number(opening.sill || 0).toFixed(1);
+}
+
+function getSelectedCommandContext() {
+  if (!selected?.type || !selected?.id) return null;
+  return { type: selected.type, id: selected.id };
 }
 
 function fillFurnitureForm(item) {
@@ -1725,8 +1730,8 @@ function createOpeningMesh(room, opening) {
   });
 
   const thickness = 0.18;
-  const height = isDoor ? 2.15 : 1.2;
-  const sill = isDoor ? 0 : 0.95;
+  const height = Math.max(0.2, Number(opening.height || (isDoor ? 2.1 : 1.5)));
+  const sill = Math.max(0, Number(opening.sill ?? (isDoor ? 0 : 0.9)));
   const frameThickness = Math.min(0.08, opening.width * 0.18);
   const yCenter = sill + height / 2;
 
@@ -2904,7 +2909,7 @@ async function runVoiceCommand(transcript = '') {
   setMessage('正在解析中文语音指令...', 'info');
   const data = await request('/api/voice-command', {
     method: 'POST',
-    body: JSON.stringify({ transcript: voiceText }),
+    body: JSON.stringify({ transcript: voiceText, selected: getSelectedCommandContext() }),
   });
 
   if (data?.llm_command) {
@@ -2920,7 +2925,13 @@ async function runCommand() {
     setMessage('请输入指令。', 'info');
     return;
   }
-  await request('/api/command', { method: 'POST', body: JSON.stringify({ command }) });
+  const data = await request('/api/command', {
+    method: 'POST',
+    body: JSON.stringify({ command, selected: getSelectedCommandContext() }),
+  });
+  if (data?.normalized_command) {
+    el.commandInput.value = data.normalized_command;
+  }
 }
 
 
