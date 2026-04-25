@@ -39,6 +39,7 @@ const el = {
   roomDepthInput: document.getElementById('roomDepthInput'),
   roomHeightInput: document.getElementById('roomHeightInput'),
   roomColorInput: document.getElementById('roomColorInput'),
+  roomFloorColorInput: document.getElementById('roomFloorColorInput'),
   addRoomBtn: document.getElementById('addRoomBtn'),
   applyRoomBtn: document.getElementById('applyRoomBtn'),
   deleteRoomBtn: document.getElementById('deleteRoomBtn'),
@@ -848,6 +849,7 @@ function fillRoomForm(room) {
   el.roomDepthInput.value = room.depth;
   if (el.roomHeightInput) el.roomHeightInput.value = Number(room.height || 3).toFixed(1);
   if (el.roomColorInput) el.roomColorInput.value = room.wall_color || '#f0efe9';
+  if (el.roomFloorColorInput) el.roomFloorColorInput.value = room.floor_color || '#d8d0bd';
 }
 
 function fillOpeningForm(opening) {
@@ -1912,7 +1914,7 @@ async function render3D() {
 
     const floor = new THREE.Mesh(
       new THREE.BoxGeometry(room.width, 0.06, room.depth),
-      materialFromName('#d8d0bd', '木纹')
+      materialFromName(room.floor_color || '#d8d0bd', '木纹')
     );
     floor.position.set(room.x + room.width / 2, 0.03, room.y + room.depth / 2);
     floor.receiveShadow = true;
@@ -2657,6 +2659,7 @@ async function applyRoomForm(isNew = false) {
     depth: parseFloat(el.roomDepthInput.value || 3),
     height: clamp(parseFloat(el.roomHeightInput?.value || 3), 2.2, 6),
     wall_color: el.roomColorInput.value,
+    floor_color: el.roomFloorColorInput?.value || '#d8d0bd',
   });
   const roomId = selectedRoom()?.id || state.rooms[0]?.id;
   const data = await request(isNew ? '/api/room' : `/api/room/${roomId}`, { method: isNew ? 'POST' : 'PATCH', body });

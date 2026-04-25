@@ -691,6 +691,7 @@ class Room:
     depth: float
     height: float = 3.0
     wall_color: str = "#f0efe9"
+    floor_color: str = "#d8d0bd"
     wall_material: str = "白色瓷砖"
 
 
@@ -736,10 +737,10 @@ class GameState:
         self.show_grid = True
         self.message = "欢迎来到装修小游戏工作台。"
         self.rooms: List[Room] = [
-            Room("room_1", "客厅", 0.0, 0.0, 4.8, 4.0, wall_material="原木风", wall_color="#ede6d8"),
-            Room("room_2", "饭厅", 4.8, 0.0, 3.0, 3.0, wall_material="白色瓷砖", wall_color="#f7f4ee"),
-            Room("room_3", "卧室", 0.0, 4.0, 3.8, 3.4, wall_material="木纹", wall_color="#efe7da"),
-            Room("room_4", "阳台", 3.8, 4.0, 2.6, 1.8, wall_material="白色瓷砖", wall_color="#eef3ea"),
+            Room("room_1", "客厅", 0.0, 0.0, 4.8, 4.0, wall_material="原木风", wall_color="#ede6d8", floor_color="#d8d0bd"),
+            Room("room_2", "饭厅", 4.8, 0.0, 3.0, 3.0, wall_material="白色瓷砖", wall_color="#f7f4ee", floor_color="#eee9da"),
+            Room("room_3", "卧室", 0.0, 4.0, 3.8, 3.4, wall_material="木纹", wall_color="#efe7da", floor_color="#d9cbb5"),
+            Room("room_4", "阳台", 3.8, 4.0, 2.6, 1.8, wall_material="白色瓷砖", wall_color="#eef3ea", floor_color="#dfe7df"),
         ]
         self.furnitures: List[Furniture] = []
         self.openings: List[Opening] = [
@@ -1102,7 +1103,7 @@ def delete_furniture(item: Furniture) -> str:
 def update_room(room: Room, payload: Dict) -> tuple[bool, str]:
     old = asdict(room)
 
-    for key in ["name", "x", "y", "width", "depth", "height", "wall_color"]:
+    for key in ["name", "x", "y", "width", "depth", "height", "wall_color", "floor_color"]:
         if key not in payload:
             continue
         value = payload[key]
@@ -1195,6 +1196,7 @@ def add_room(
     depth: float,
     height: float = 3.0,
     wall_color: str = "#f0efe9",
+    floor_color: str = "#d8d0bd",
     wall_material: str = "白色瓷砖",
 ) -> tuple[bool, str, Optional[Room]]:
     width = clamp(width, 1.6, 12.0)
@@ -1202,7 +1204,7 @@ def add_room(
     height = clamp(height, 2.2, 6.0)
     room_x, room_y = find_available_room_position(width, depth, x, y)
     room_name = name or ROOM_TYPE_OPTIONS[min(len(STATE.rooms), len(ROOM_TYPE_OPTIONS) - 1)]
-    room = Room(next_id("room", STATE.rooms), room_name, room_x, room_y, width, depth, height=height, wall_color=wall_color, wall_material=wall_material)
+    room = Room(next_id("room", STATE.rooms), room_name, room_x, room_y, width, depth, height=height, wall_color=wall_color, floor_color=floor_color, wall_material=wall_material)
 
     overlap = room_overlaps(room)
     if overlap:
@@ -1421,7 +1423,10 @@ def apply_command(text: str) -> str:
         if depth_m:
             payload["depth"] = float(depth_m.group(1))
         if color:
-            payload["wall_color"] = color
+            if any(w in text for w in ["地面", "地板", "地砖", "地毯"]):
+                payload["floor_color"] = color
+            else:
+                payload["wall_color"] = color
         if payload:
             ok, msg = update_room(room, payload)
             return msg if ok else msg
@@ -1574,6 +1579,7 @@ def api_import():
                     depth=room_data.get("depth", 3),
                     height=clamp(float(room_data.get("height", 3.0)), 2.2, 6.0),
                     wall_color=room_data.get("wall_color", "#f0efe9"),
+                    floor_color=room_data.get("floor_color", "#d8d0bd"),
                     wall_material=room_data.get("wall_material", "白色瓷砖")
                 )
                 STATE.rooms.append(room)
@@ -1714,6 +1720,7 @@ def api_add_room():
         float(payload.get("depth", 3.0)),
         float(payload.get("height", 3.0)),
         payload.get("wall_color", "#f0efe9"),
+        payload.get("floor_color", "#d8d0bd"),
         payload.get("wall_material", "白色瓷砖"),
     )
     STATE.message = msg
@@ -2168,10 +2175,10 @@ def make_safe_floorplan_fallback():
     """
     return normalize_ai_floorplan_result({
         "rooms": [
-            {"id": "room_1", "name": "客厅", "x": 0, "y": 0, "width": 4.8, "depth": 4.0, "height": 3.0, "wall_color": "#f0efe9"},
-            {"id": "room_2", "name": "卧室", "x": 0, "y": 4.2, "width": 3.8, "depth": 3.4, "height": 3.0, "wall_color": "#f0efe9"},
-            {"id": "room_3", "name": "饭厅", "x": 5.0, "y": 0, "width": 3.0, "depth": 3.0, "height": 3.0, "wall_color": "#f0efe9"},
-            {"id": "room_4", "name": "阳台", "x": 3.9, "y": 4.2, "width": 2.6, "depth": 1.8, "height": 2.8, "wall_color": "#f0efe9"},
+            {"id": "room_1", "name": "客厅", "x": 0, "y": 0, "width": 4.8, "depth": 4.0, "height": 3.0, "wall_color": "#f0efe9", "floor_color": "#d8d0bd"},
+            {"id": "room_2", "name": "卧室", "x": 0, "y": 4.2, "width": 3.8, "depth": 3.4, "height": 3.0, "wall_color": "#f0efe9", "floor_color": "#d8d0bd"},
+            {"id": "room_3", "name": "饭厅", "x": 5.0, "y": 0, "width": 3.0, "depth": 3.0, "height": 3.0, "wall_color": "#f0efe9", "floor_color": "#d8d0bd"},
+            {"id": "room_4", "name": "阳台", "x": 3.9, "y": 4.2, "width": 2.6, "depth": 1.8, "height": 2.8, "wall_color": "#f0efe9", "floor_color": "#d8d0bd"},
         ],
         "furnitures": [],
         "openings": [
@@ -2226,6 +2233,7 @@ def normalize_ai_floorplan_result(data):
             "depth": max(1.0, float(room.get("depth") or 3)),
             "height": clamp(float(room.get("height") or 3), 2.2, 6.0),
             "wall_color": room.get("wall_color") or "#f0efe9",
+            "floor_color": room.get("floor_color") or "#d8d0bd",
             "wall_material": room.get("wall_material") or "白色瓷砖",
         })
 
@@ -2308,7 +2316,8 @@ def parse_floorplan(image_base64):
       "width": 4.8,
       "depth": 4.0,
       "height": 3.0,
-      "wall_color": "#f0efe9"
+      "wall_color": "#f0efe9",
+      "floor_color": "#d8d0bd"
     }
   ],
   "furnitures": [
