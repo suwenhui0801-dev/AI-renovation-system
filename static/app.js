@@ -695,17 +695,28 @@ function inferFeedbackKind(message, explicitKind = null) {
 }
 
 function repairDisplayText(value) {
-  const text = String(value || '');
+  const text = String(value ?? '');
   if (!text) return '';
-  if (!/[ÃÂÅÆÇÈÉÊËÌÍÎÏÐÑÒÓÔÕÖØÙÚÛÜÝÞßàáâãäåæç]/.test(text) && !/å|æ|ç|é|è|â|ï|ð/.test(text)) {
-    return text;
-  }
-  try {
-    const repaired = decodeURIComponent(escape(text));
-    return repaired || text;
-  } catch {
-    return text;
-  }
+
+  const decoder = new TextDecoder('utf-8', { fatal: false });
+
+  return text.replace(/[\u00C0-\u00FF\u0080-\u00BF]{2,}/g, chunk => {
+    try {
+      const bytes = Uint8Array.from(
+        Array.from(chunk),
+        ch => ch.charCodeAt(0) & 0xff
+      );
+      const repaired = decoder.decode(bytes);
+
+      if (/[\u4e00-\u9fff，。？！、（）]/.test(repaired)) {
+        return repaired;
+      }
+
+      return chunk;
+    } catch {
+      return chunk;
+    }
+  });
 }
 
 function setMessage(message, kind = null) {

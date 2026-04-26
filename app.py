@@ -16,6 +16,7 @@ from typing import Dict, List, Optional
 from flask import Flask, jsonify, render_template, request, url_for
 
 app = Flask(__name__)
+app.json.ensure_ascii = False
 
 @app.errorhandler(Exception)
 def handle_unexpected_error(e):
@@ -1207,14 +1208,6 @@ def update_room(room: Room, payload: Dict) -> tuple[bool, str]:
         if op.room_id == room.id:
             clamp_opening(op)
 
-    for other in STATE.rooms:
-        if other.id == room.id:
-            continue
-        if not (room.x + room.width <= other.x or other.x + other.width <= room.x or room.y + room.depth <= other.y or other.y + other.depth <= room.y):
-            for k, v in old.items():
-                setattr(room, k, v)
-            return False, f"{room.name}调整失败：与{other.name}重叠。"
-
     return True, f"{room.name}已更新。"
 
 
@@ -1226,49 +1219,10 @@ def delete_room(room: Room) -> str:
 
 
 def room_overlaps(room: Room) -> Optional[Room]:
-    for other in STATE.rooms:
-        if other.id == room.id:
-            continue
-        if not (room.x + room.width <= other.x or other.x + other.width <= room.x or room.y + room.depth <= other.y or other.y + other.depth <= room.y):
-            return other
     return None
 
 
 def find_available_room_position(width: float, depth: float, preferred_x: float, preferred_y: float) -> tuple[float, float]:
-    candidates: list[tuple[float, float]] = [(preferred_x, preferred_y)]
-    if STATE.rooms:
-        min_x = min(r.x for r in STATE.rooms)
-        min_y = min(r.y for r in STATE.rooms)
-        max_x = max(r.x + r.width for r in STATE.rooms)
-        max_y = max(r.y + r.depth for r in STATE.rooms)
-        step = 0.6
-        margin = 0.8
-
-        scan_min_x = min(min_x - width - 2.0, preferred_x - 4.0)
-        scan_max_x = max(max_x + 2.0, preferred_x + 4.0)
-        scan_min_y = min(min_y - depth - 2.0, preferred_y - 4.0)
-        scan_max_y = max(max_y + 2.0, preferred_y + 4.0)
-
-        x = scan_min_x
-        while x <= scan_max_x:
-            y = scan_min_y
-            while y <= scan_max_y:
-                candidates.append((round(x, 1), round(y, 1)))
-                y += step
-            x += step
-
-        for room in STATE.rooms:
-            candidates.extend([
-                (round(room.x + room.width + margin, 1), round(room.y, 1)),
-                (round(room.x, 1), round(room.y + room.depth + margin, 1)),
-                (round(room.x + room.width + margin, 1), round(room.y + room.depth + margin, 1)),
-            ])
-
-    for cx, cy in candidates:
-        trial = Room("trial", "trial", cx, cy, width, depth)
-        if not room_overlaps(trial):
-            return cx, cy
-
     return preferred_x, preferred_y
 
 
@@ -1290,13 +1244,7 @@ def add_room(
     room_name = name or ROOM_TYPE_OPTIONS[min(len(STATE.rooms), len(ROOM_TYPE_OPTIONS) - 1)]
     room = Room(next_id("room", STATE.rooms), room_name, room_x, room_y, width, depth, height=height, wall_color=wall_color, floor_color=floor_color, wall_material=wall_material)
 
-    overlap = room_overlaps(room)
-    if overlap:
-        return False, f"新增房间失败：与{overlap.name}重叠。", None
-
     STATE.rooms.append(room)
-    if room_x != x or room_y != y:
-        return True, f"已添加{room.name}，并自动避让到空位置。", room
     return True, f"已添加{room.name}。", room
 
 
@@ -1313,7 +1261,7 @@ def add_opening(
     material: Optional[str] = None,
 ) -> tuple[bool, str, Optional[Opening]]:
     if opening_type not in OPENING_TYPE_LABELS or wall not in WALLS:
-        return False, "é¨çªåæ°ä¸æ­£ç¡®ã", None
+        return False, "门窗参数不正确。", None
 
     same_type_count = len([o for o in STATE.openings if o.type == opening_type and o.room_id == room.id]) + 1
     opening = Opening(
@@ -1327,12 +1275,12 @@ def add_opening(
         height=float(height if height is not None else (1.5 if opening_type == "window" else 2.1)),
         sill=float(sill if sill is not None else (0.9 if opening_type == "window" else 0.0)),
         color=color or ("#79bdf8" if opening_type == "window" else "#8b6a4d"),
-        material=material or ("ç»ç" if opening_type == "window" else "æ¨è´¨"),
+        material=material or ("玻璃" if opening_type == "window" else "木质"),
     )
 
     clamp_opening(opening)
     STATE.openings.append(opening)
-    return True, f"å·²å¨{room.name}æ·»å {OPENING_TYPE_LABELS[opening_type]}ã", opening
+    return True, f"已在{room.name}添加{OPENING_TYPE_LABELS[opening_type]}。", opening
 
 
 def update_opening(opening: Opening, payload: Dict) -> tuple[bool, str]:
@@ -1347,7 +1295,7 @@ def update_opening(opening: Opening, payload: Dict) -> tuple[bool, str]:
         opening.height = 1.5 if opening.type == "window" else 2.1
         opening.sill = 0.9 if opening.type == "window" else 0.0
         opening.color = "#79bdf8" if opening.type == "window" else "#8b6a4d"
-        opening.material = "ç»ç" if opening.type == "window" else "æ¨è´¨"
+        opening.material = "玻璃" if opening.type == "window" else "木质"
 
     for key in ["name", "offset", "width", "height", "sill", "color", "material"]:
         if key in payload:
@@ -1359,12 +1307,12 @@ def update_opening(opening: Opening, payload: Dict) -> tuple[bool, str]:
     opening.height = max(0.2, float(opening.height))
     opening.sill = max(0.0, float(opening.sill))
     clamp_opening(opening)
-    return True, f"å·²æ´æ°{opening.name or OPENING_TYPE_LABELS[opening.type]}ã"
+    return True, f"已更新{opening.name or OPENING_TYPE_LABELS[opening.type]}。"
 
 
 def delete_opening(opening: Opening) -> str:
     STATE.openings = [o for o in STATE.openings if o.id != opening.id]
-    return f"å·²å é¤{opening.name or OPENING_TYPE_LABELS[opening.type]}ã"
+    return f"已删除{opening.name or OPENING_TYPE_LABELS[opening.type]}。"
 
 
 def parse_distance(text: str, default: float = 0.9) -> float:
