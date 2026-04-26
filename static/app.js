@@ -1019,33 +1019,7 @@ function drawGrid(v) {
 }
 
 function drawRoomDecor(room, x, y, w, h) {
-  ctx.save();
-  ctx.strokeStyle = 'rgba(51,65,85,.25)';
-  ctx.fillStyle = 'rgba(255,255,255,.30)';
-  const name = room.name || '';
-
-  if (name.includes('厨房')) {
-    ctx.strokeRect(x + 16, y + 14, Math.max(22, w * 0.55), 16);
-    ctx.fillRect(x + 18, y + 16, Math.max(18, w * 0.22), 12);
-    ctx.beginPath();
-    ctx.arc(x + Math.max(28, w * 0.48), y + 22, 6, 0, Math.PI * 2);
-    ctx.stroke();
-  }
-
-  if (name.includes('浴室')) {
-    ctx.strokeRect(x + 16, y + 16, Math.max(22, w * 0.28), Math.max(18, h * 0.18));
-    ctx.beginPath();
-    ctx.arc(x + Math.max(46, w * 0.42), y + Math.max(34, h * 0.26), 10, 0, Math.PI * 2);
-    ctx.stroke();
-  }
-
-  if (name.includes('阳台')) {
-    ctx.setLineDash([5, 5]);
-    ctx.strokeRect(x + 12, y + 12, w - 24, h - 24);
-    ctx.setLineDash([]);
-  }
-
-  ctx.restore();
+  return;
 }
 
 function drawRoom(room, v) {
